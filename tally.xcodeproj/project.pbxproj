@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		54F79F482D482A4F00C90408 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 54F79F472D482A4F00C90408 /* README.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		54791A0D2D420001005F00B6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		547919FB2D41FFFF005F00B6 /* tally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tally.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		54791A0C2D420001005F00B6 /* tallyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tallyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		54791A162D420001005F00B6 /* tallyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tallyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		54F79F472D482A4F00C90408 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -79,6 +84,7 @@
 				54791A0F2D420001005F00B6 /* tallyTests */,
 				54791A192D420001005F00B6 /* tallyUITests */,
 				547919FC2D41FFFF005F00B6 /* Products */,
+				54F79F472D482A4F00C90408 /* README.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -212,6 +218,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				54F79F482D482A4F00C90408 /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

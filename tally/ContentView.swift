@@ -7,9 +7,34 @@
 
 import SwiftUI
 
+extension Color {
+    func toHex() -> String {
+        guard let components = UIColor(self).cgColor.components else { return "#000000" }
+        let r = Int((components[0] * 255.0).rounded())
+        let g = Int((components[1] * 255.0).rounded())
+        let b = Int((components[2] * 255.0).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    init?(hex: String) {
+        var hexSanitized = hex.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+
+        var rgb: UInt64 = 0
+        Scanner(string: hexSanitized).scanHexInt64(&rgb)
+
+        let r = Double((rgb >> 16) & 0xFF) / 255.0
+        let g = Double((rgb >> 8) & 0xFF) / 255.0
+        let b = Double(rgb & 0xFF) / 255.0
+
+        self.init(red: r, green: g, blue: b)
+    }
+}
+
+
 // MARK: - Data Models
 
-struct Transaction: Identifiable {
+struct Transaction: Identifiable, Codable {
     let id = UUID()
     var categoryID: UUID
     var date: Date
@@ -17,11 +42,16 @@ struct Transaction: Identifiable {
     var description: String
 }
 
-struct CategoryBudget: Identifiable {
+struct CategoryBudget: Identifiable, Codable {
     let id: UUID
     var name: String
     var total: Double
-    var color: Color
+    private var colorHex: String // Store color as a hex string
+    
+    var color: Color {
+        get { Color(hex: colorHex) ?? .gray }
+        set { colorHex = newValue.toHex() }
+    }
     
     init(
         id: UUID = UUID(),
@@ -32,9 +62,10 @@ struct CategoryBudget: Identifiable {
         self.id = id
         self.name = name
         self.total = total
-        self.color = color
+        self.colorHex = color.toHex()
     }
 }
+
 
 // MARK: - Global Helpers
 
@@ -638,292 +669,249 @@ struct MonthPickerView: View {
     }
 }
 
-// MARK: - Main ContentView
+// MARK: - Component Cards
+
+struct MonthSelectorCard: View {
+    @Binding var selectedMonth: Date
+    
+    var body: some View {
+        VStack {
+            HStack {
+                Button(action: {
+                    if let previous = previousMonth(of: selectedMonth) {
+                        selectedMonth = previous
+                    }
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.title2)
+                }
+                
+                Spacer()
+                
+                Text(monthYearFormatter.string(from: selectedMonth))
+                    .font(.headline)
+                    .bold()
+                
+                Spacer()
+                
+                Button(action: {
+                    if let next = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) {
+                        selectedMonth = next
+                    }
+                }) {
+                    Image(systemName: "chevron.right")
+                        .font(.title2)
+                }
+            }
+            .padding()
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 4)
+        .padding(.horizontal)
+    }
+}
+
+struct RolloverBalanceCard: View {
+    @Binding var rolloverLeftover: Double
+    @Binding var categories: [CategoryBudget]
+    @Binding var goals: [SavingsGoal]
+    let overallBudget: Double
+    
+    var body: some View {
+        NavigationLink {
+            RolloverDetailView(
+                rolloverLeftover: $rolloverLeftover,
+                categories: $categories,
+                goals: $goals,
+                overallBudget: overallBudget
+            )
+        } label: {
+            HStack {
+                Text("Rollover Balance")
+                    .font(.headline)
+                
+                Spacer()
+                
+                Text("$\(Int(rolloverLeftover))")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 4)
+        .padding(.horizontal)
+    }
+}
+
+struct CategoriesCard: View {
+    @Binding var categories: [CategoryBudget]
+    @Binding var transactions: [Transaction]
+    let selectedMonth: Date
+    
+    private var monthlyTransactions: [Transaction] {
+        transactionsForMonth(transactions, selectedMonth: selectedMonth)
+    }
+    
+    private var spentByCategory: [UUID: Double] {
+        monthlySpentByCategory(categories: categories, transactions: monthlyTransactions)
+    }
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            NavigationLink {
+                AllTransactionsView(
+                    transactions: $transactions,
+                    categories: $categories,
+                    selectedMonth: selectedMonth
+                )
+            } label: {
+                HStack {
+                    OverallBudgetRow(
+                        categories: categories,
+                        monthlySpentByCategory: spentByCategory
+                    )
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+            }
+            
+            ForEach(categories) { cat in
+                NavigationLink {
+                    TransactionLogView(
+                        category: cat,
+                        transactions: transactions,
+                        selectedMonth: selectedMonth
+                    )
+                } label: {
+                    HStack {
+                        CategoryRow(
+                            category: cat,
+                            spentThisMonth: spentByCategory[cat.id] ?? 0
+                        )
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+        .padding(.vertical)
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 4)
+        .padding(.horizontal)
+    }
+}
+
+struct CalendarCard: View {
+    let transactions: [Transaction]
+    let selectedMonth: Date
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            MonthlyCalendarView(
+                month: selectedMonth,
+                transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
+            )
+            .padding(.top, 16)
+            .padding(.bottom, 16)
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 4)
+        .padding(.horizontal)
+    }
+}
+
+struct RecordTransactionButton: View {
+    @Binding var showRecordTransaction: Bool
+    
+    var body: some View {
+        GeometryReader { geo in
+            Button("Record Transaction") {
+                showRecordTransaction = true
+            }
+            .font(.title3)
+            .frame(width: geo.size.width - 32, height: 40)
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+            .padding(.horizontal, 16)
+        }
+        .frame(height: 40)
+        .padding(.bottom, 16)
+    }
+}
+
+// MARK: - ContentView
 
 struct ContentView: View {
     
-    // Categories & transactions
     @State private var categories: [CategoryBudget] = [
-        CategoryBudget(name: "Housing",        total: 2400, color: .yellow),
-        CategoryBudget(name: "Transportation", total:  700, color: .green),
-        CategoryBudget(name: "Groceries",      total:  900, color: .orange),
-        CategoryBudget(name: "Healthcare",     total:  200, color: .red),
-        CategoryBudget(name: "Entertainment",  total:  700, color: .purple),
-        CategoryBudget(name: "Misc",           total:  500, color: .brown)
-    ]
-    @State private var transactions: [Transaction] = []
+        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
+        CategoryBudget(name: "Transportation", total: 700, color: .green),
+        CategoryBudget(name: "Groceries", total: 900, color: .orange),
+        CategoryBudget(name: "Healthcare", total: 200, color: .red),
+        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
+        CategoryBudget(name: "Misc", total: 500, color: .brown)
+    ] {
+        didSet {
+            saveData(categories, to: "categories.json")
+        }
+    }
     
-    // Various sheets
+    @State private var transactions: [Transaction] = [] {
+        didSet {
+            saveData(transactions, to: "transactions.json")
+        }
+    }
+    @State private var selectedMonth = Date()
+    @State private var rolloverLeftover: Double = 0
     @State private var showSettings = false
     @State private var showRecordTransaction = false
     @State private var showMonthPicker = false
     
-    // The currently chosen month, defaults to "today"
-    @State private var selectedMonth = Date()
-    
-    // The leftover from prior months
-    @State private var rolloverLeftover: Double = 0
-    
-    // The overall budget is the sum of all categories
     private var overallBudget: Double {
         categories.reduce(0) { $0 + $1.total }
     }
     
-    private func updateRolloverLeftover() {
-        // Reset rollover to zero initially
-        rolloverLeftover = 0
-
-        // Define the starting point for the rollover balance (January 2024)
-        let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
-
-        // Check if the selected month is before the starting point
-        guard selectedMonth >= startingPointDate else {
-            return // No rollover before the starting point
-        }
-
-        // If the selected month is January 2024, start with zero rollover
-        if selectedMonth == startingPointDate {
-            rolloverLeftover = 0
-            return
-        }
-
-        // Iterate backward from the selected month to calculate rollover
-        var currentMonth = selectedMonth
-        rolloverLeftover = 0 // Start at zero
-
-        while currentMonth > startingPointDate {
-            guard let prevMonthDate = previousMonth(of: currentMonth) else { break }
-            currentMonth = prevMonthDate
-
-            // Get transactions for the previous month
-            let prevTx = transactionsForMonth(transactions, selectedMonth: prevMonthDate)
-
-            // Calculate leftover budget for the previous month
-            let leftoverFromPrev = leftoverForMonth(allCategories: categories, monthTransactions: prevTx)
-
-            // Add the leftover from the previous month to the rollover
-            rolloverLeftover += leftoverFromPrev
-        }
-
-    }
-
     var body: some View {
         NavigationStack {
             ZStack {
                 ScrollView {
                     VStack(spacing: 16) {
-                        // Month Selector Card
-                        VStack {
-                            HStack {
-                                Button(action: {
-                                    if let previous = previousMonth(of: selectedMonth) {
-                                        selectedMonth = previous
-                                    }
-                                }) {
-                                    Image(systemName: "chevron.left")
-                                        .font(.title2)
-                                }
-                                
-                                Spacer()
-                                
-                                Text(monthYearFormatter.string(from: selectedMonth))
-                                    .font(.headline)
-                                    .bold()
-                                
-                                Spacer()
-                                
-                                Button(action: {
-                                    if let next = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) {
-                                        selectedMonth = next
-                                    }
-                                }) {
-                                    Image(systemName: "chevron.right")
-                                        .font(.title2)
-                                }
-                            }
-                            .padding()
-                        }
-                        .background(Color(.systemBackground))
-                        .cornerRadius(10)
-                        .shadow(radius: 4)
-                        .padding(.horizontal)
-                        
-                        // Rollover Balance Card
-                        VStack {
-                            NavigationLink {
-                                RolloverDetailView(
-                                    rolloverLeftover: $rolloverLeftover,
-                                    categories: $categories,
-                                    overallBudget: overallBudget
-                                )
-                            } label: {
-                                HStack {
-                                    Text("Rollover Balance")
-                                        .font(.headline)
-                                    
-                                    Spacer()
-                                    
-                                    Text("$\(Int(rolloverLeftover))")
-                                        .font(.headline)
-                                        .foregroundColor(.secondary)
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding()
-                            }
-                        }
-                        .background(Color(.systemBackground))
-                        .cornerRadius(10)
-                        .shadow(radius: 4)
-                        .padding(.horizontal)
-                        
-//                        // Overall Budget Card
-//                        VStack {
-//                            NavigationLink {
-//                                AllTransactionsView(
-//                                    transactions: $transactions,
-//                                    categories: $categories,
-//                                    selectedMonth: selectedMonth
-//                                )
-//                            } label: {
-//                                OverallBudgetRow(
-//                                    categories: categories,
-//                                    monthlySpentByCategory: monthlySpentByCategory(
-//                                        categories: categories,
-//                                        transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
-//                                    )
-//                                )
-//                                .frame(height: 40)
-//                                .padding()
-//                            }
-//                        }
-//                        .background(Color(.systemBackground))
-//                        .cornerRadius(10)
-//                        .shadow(radius: 4)
-//                        .padding(.horizontal)
-                        
-                        // Categories Card (including Overall Budget and Rollover Balance)
-                        VStack(spacing: 8) {
-                            // Overall Budget Row
-                            NavigationLink {
-                                AllTransactionsView(
-                                    transactions: $transactions,
-                                    categories: $categories,
-                                    selectedMonth: selectedMonth
-                                )
-                            } label: {
-                                HStack {
-                                    OverallBudgetRow(
-                                        categories: categories,
-                                        monthlySpentByCategory: monthlySpentByCategory(
-                                            categories: categories,
-                                            transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
-                                        )
-                                    )
-//                                    .frame(height: 40)
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.horizontal)
-//                                .padding(.vertical) // Consistent padding
-                            }
-                            
-//                            // Rollover Balance Row (Bar)
-//                            NavigationLink {
-//                                RolloverDetailView(
-//                                    rolloverLeftover: $rolloverLeftover,
-//                                    categories: $categories,
-//                                    overallBudget: overallBudget
-//                                )
-//                            } label: {
-//                                HStack {
-//                                    let spent = max(0, overallBudget - rolloverLeftover)
-//                                    let rolloverCategory = CategoryBudget(
-//                                        name: "Rollover Balance",
-//                                        total: overallBudget,
-//                                        color: .green
-//                                    )
-//                                    CategoryRow(category: rolloverCategory, spentThisMonth: spent)
-////                                        .frame(height: 40)
-//
-//                                    Image(systemName: "chevron.right")
-//                                        .foregroundColor(.secondary)
-//                                }
-//                                .padding(.horizontal)
-////                                .padding(.vertical, 4) // Consistent padding
-//                            }
-                            
-                            // Individual Categories Rows
-                            let spentDict = monthlySpentByCategory(categories: categories, transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth))
-                            ForEach(categories) { cat in
-                                NavigationLink {
-                                    TransactionLogView(
-                                        category: cat,
-                                        transactions: transactions,
-                                        selectedMonth: selectedMonth
-                                    )
-                                } label: {
-                                    HStack {
-                                        CategoryRow(category: cat, spentThisMonth: spentDict[cat.id] ?? 0)
-//                                            .frame(height: 40) // Fixed height
-                                        
-                                        Image(systemName: "chevron.right")
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.horizontal)
-//                                    .padding(.vertical, 4) // space between bars
-                                }
-                            }
-                        }
-                        .padding(.vertical)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(10)
-                        .shadow(radius: 4)
-                        .padding(.horizontal)
-
-
-                        
-                        // Calendar Card
-                        VStack(spacing: 16) { // Added spacing above the calendar
-                            MonthlyCalendarView(
-                                month: selectedMonth,
-                                transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
-                            )
-                            .padding(.top, 16)
-                            .padding(.bottom, 16)
-                        }
-                        .background(Color(.systemBackground))
-                        .cornerRadius(10)
-                        .shadow(radius: 4)
-                        .padding(.horizontal)
+                        MonthSelectorCard(selectedMonth: $selectedMonth)
+                        RolloverBalanceCard(
+                            rolloverLeftover: $rolloverLeftover,
+                            categories: $categories,
+                            goals: $goals,
+                            overallBudget: overallBudget
+                        )
+                        CategoriesCard(
+                            categories: $categories,
+                            transactions: $transactions,
+                            selectedMonth: selectedMonth
+                        )
+                        CalendarCard(
+                            transactions: transactions,
+                            selectedMonth: selectedMonth
+                        )
                     }
                     .padding(.top)
                 }
-
-
-                .listStyle(.plain)
                 
-                // Big pinned "Record Transaction" button
                 VStack {
                     Spacer()
-                    GeometryReader { geo in
-                        Button("Record Transaction") {
-                            showRecordTransaction = true
-                        }
-                        .font(.title3)
-                        .frame(width: geo.size.width - 32, height: 40)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                        .padding(.horizontal, 16)
-                    }
-                    .frame(height: 40)
-                    .padding(.bottom, 16)
+                    RecordTransactionButton(showRecordTransaction: $showRecordTransaction)
                 }
             }
-            // Large month text on the left
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -932,119 +920,197 @@ struct ContentView: View {
                         Image(systemName: "gearshape.fill")
                     }
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    NavigationLink(destination: GoalsView()) {
-                        Text("Goals")
-                            .font(.headline)
-                            .bold()
+                ToolbarItem(placement: .navigationBarLeading) { // Use a ToolbarItem for NavigationLink
+                    NavigationLink(destination: GoalsView(goals: $goals)) {
+                        Text("Goals").font(.headline).bold()
                     }
                 }
-
             }
+
             .navigationBarTitleDisplayMode(.large)
         }
-        // Recompute rollover whenever the month changes
-        .onChange(of: selectedMonth) { _ in
-            rolloverLeftover = 0 // reset, then recalc
-            updateRolloverLeftover()
-        }
+        .onChange(of: selectedMonth) { _ in updateRolloverLeftover() }
         .onAppear {
-            rolloverLeftover = 0
+            if let savedTransactions: [Transaction] = loadData([Transaction].self, from: "transactions.json") {
+                transactions = savedTransactions
+            } else {
+                transactions = [] // Provide default transactions or keep it empty
+            }
+            
+            if let savedCategories: [CategoryBudget] = loadData([CategoryBudget].self, from: "categories.json") {
+                categories = savedCategories
+            } else {
+                categories = [
+                    CategoryBudget(name: "Housing", total: 2400, color: .yellow),
+                    CategoryBudget(name: "Transportation", total: 700, color: .green),
+                    CategoryBudget(name: "Groceries", total: 900, color: .orange),
+                    CategoryBudget(name: "Healthcare", total: 200, color: .red),
+                    CategoryBudget(name: "Entertainment", total: 700, color: .purple),
+                    CategoryBudget(name: "Misc", total: 500, color: .brown)
+                ]
+            }
+            
+            loadGoals()
             updateRolloverLeftover()
         }
-        // Settings
+
+
         .sheet(isPresented: $showSettings) {
             SettingsView(categories: $categories)
         }
-        // Record Transaction
         .sheet(isPresented: $showRecordTransaction) {
-            RecordTransactionView(categories: $categories, transactions: $transactions, refreshRollover: updateRolloverLeftover)
+            RecordTransactionView(
+                categories: $categories,
+                transactions: $transactions,
+                refreshRollover: updateRolloverLeftover
+            )
         }
-
-        // Month Picker
         .sheet(isPresented: $showMonthPicker) {
             MonthPickerView(selectedMonth: $selectedMonth)
         }
     }
+    
+    private func updateRolloverLeftover() {
+            // Define the starting point for the rollover balance (January 2024)
+            let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+            
+            // Reset rollover to zero initially
+            rolloverLeftover = 0
+            
+            // Check if the selected month is before the starting point
+            guard selectedMonth >= startingPointDate else {
+                return // No rollover before the starting point
+            }
+            
+            // If the selected month is January 2024, start with zero rollover
+            if Calendar.current.isDate(selectedMonth, equalTo: startingPointDate, toGranularity: .month) {
+                rolloverLeftover = 0
+                return
+            }
+            
+            // Iterate backward from the selected month to calculate rollover
+            var currentMonth = selectedMonth
+            while currentMonth > startingPointDate {
+                guard let prevMonth = previousMonth(of: currentMonth) else { break }
+                
+                // Calculate leftover for the previous month
+                let prevMonthTransactions = transactionsForMonth(transactions, selectedMonth: prevMonth)
+                let prevMonthLeftover = leftoverForMonth(
+                    allCategories: categories,
+                    monthTransactions: prevMonthTransactions
+                )
+                
+                // Add to rollover balance
+                rolloverLeftover += prevMonthLeftover
+                
+                // Move to previous month
+                currentMonth = prevMonth
+            }
+        }
+    @AppStorage("savingsGoals") private var goalsData: Data = Data()
+    @State private var goals: [SavingsGoal] = [] {
+        didSet {
+            saveGoals()
+        }
+    }
+
+    private func saveGoals() {
+        do {
+            let data = try JSONEncoder().encode(goals)
+            goalsData = data
+        } catch {
+            print("Error saving goals: \(error)")
+        }
+    }
+
+    private func loadGoals() {
+        guard !goalsData.isEmpty else { return }
+        do {
+            goals = try JSONDecoder().decode([SavingsGoal].self, from: goalsData)
+        } catch {
+            print("Error loading goals: \(error)")
+        }
+    }
+
 }
 
 // MARK: - Goals View
 
 struct GoalsView: View {
-    @State private var goals: [SavingsGoal] = []
+    @Binding var goals: [SavingsGoal]
     @State private var showAddGoalMenu = false
 
     var body: some View {
         NavigationStack {
             VStack {
-                // Display list of goals
                 if goals.isEmpty {
-                    Spacer()
-                    Button(action: {
-                        showAddGoalMenu = true
-                    }) {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 50))
-                            .foregroundColor(.blue)
-                    }
-                    Spacer()
+                    ContentUnavailableView("No Goals", systemImage: "plus.circle")
                 } else {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            ForEach(goals) { goal in
-                                VStack(alignment: .leading, spacing: 4) {
+                    List {
+                        ForEach($goals) { $goal in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
                                     Text(goal.title)
                                         .font(.headline)
-                                    Text("$\(goal.amount, specifier: "%.2f")")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text("$\(goal.currentAmount, specifier: "%.2f") / $\(goal.targetAmount, specifier: "%.2f")")
                                 }
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(10)
+                                
+                                ProgressView(value: goal.currentAmount, total: goal.targetAmount)
+                                    .progressViewStyle(LinearProgressViewStyle())
                             }
-                            Button(action: {
-                                showAddGoalMenu = true
-                            }) {
-                                Image(systemName: "plus.circle")
-                                    .font(.system(size: 50))
-                                    .foregroundColor(.blue)
-                            }
+                            .padding(.vertical, 8)
                         }
-                        .padding()
+                        .onDelete { indexes in
+                            goals.remove(atOffsets: indexes)
+                        }
+                    }
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showAddGoalMenu = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
                 }
             }
             .sheet(isPresented: $showAddGoalMenu) {
                 AddGoalView(goals: $goals)
             }
-            .navigationTitle("Goals")
+            .navigationTitle("Savings Goals")
         }
     }
 }
 
+
 struct AddGoalView: View {
     @Binding var goals: [SavingsGoal]
     @Environment(\.dismiss) private var dismiss
-
     @State private var title = ""
     @State private var amount = ""
+    @State private var errorMessage = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Goal Details") {
                     TextField("Title", text: $title)
-                    TextField("Amount", text: $amount)
+                    TextField("Target Amount", text: $amount)
                         .keyboardType(.decimalPad)
                 }
+                
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                }
             }
-            .navigationTitle("Add Goal")
+            .navigationTitle("New Goal")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        addGoal()
+                    Button("Save") {
+                        saveGoal()
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
@@ -1055,10 +1121,24 @@ struct AddGoalView: View {
             }
         }
     }
-
-    private func addGoal() {
-        guard let amountValue = Double(amount), !title.isEmpty else { return }
-        let newGoal = SavingsGoal(title: title, amount: amountValue)
+    
+    private func saveGoal() {
+        guard !title.isEmpty else {
+            errorMessage = "Please enter a title"
+            return
+        }
+        
+        guard let amountValue = Double(amount), amountValue > 0 else {
+            errorMessage = "Please enter a valid amount"
+            return
+        }
+        
+        let newGoal = SavingsGoal(
+            title: title,
+            targetAmount: amountValue,
+            currentAmount: 0
+        )
+        
         goals.append(newGoal)
         dismiss()
     }
@@ -1066,10 +1146,11 @@ struct AddGoalView: View {
 
 
 // Data model for savings goals
-struct SavingsGoal: Identifiable {
-    let id = UUID()
-    let title: String
-    let amount: Double
+struct SavingsGoal: Identifiable, Codable {
+    var id = UUID()
+    var title: String
+    var targetAmount: Double
+    var currentAmount: Double
 }
 
 
@@ -1080,6 +1161,7 @@ struct SavingsGoal: Identifiable {
 struct RolloverDetailView: View {
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
+    @Binding var goals: [SavingsGoal]
     let overallBudget: Double
     
     @State private var showTransfer = false
@@ -1103,17 +1185,16 @@ struct RolloverDetailView: View {
                 }
                 
                 Section("Transfer Rollover") {
-                    Button("Reallocate Funds") {
+                    Button("Transfer to Category or Goal") {
                         showTransfer = true
                     }
                 }
             }
-            .navigationTitle("Rollover Balance")
             .sheet(isPresented: $showTransfer) {
-                // The same unified transfer screen
                 TransferFundsView(
                     rolloverLeftover: $rolloverLeftover,
-                    categories: $categories
+                    categories: $categories,
+                    goals: $goals
                 )
             }
         }
@@ -1125,44 +1206,51 @@ struct RolloverDetailView: View {
 /// A single screen to transfer from Rollover or a category to Rollover or another category.
 struct TransferFundsView: View {
     @Environment(\.dismiss) private var dismiss
-    
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
+    @Binding var goals: [SavingsGoal]
     
-    // default from=0 => Rollover, to=1 => first category
-    @State private var fromIndex: Int = 0
-    @State private var toIndex: Int = 1
-    @State private var amountString: String = ""
-    @State private var errorMessage: String = ""
-    
+    @State private var amountString = ""
+    @State private var errorMessage = ""
+    @State private var transferToGoal = false
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("From") {
-                    Picker("From Source", selection: $fromIndex) {
-                        Text("Rollover").tag(0)
-                        ForEach(categories.indices, id: \.self) { i in
-                            Text(categories[i].name).tag(i+1)
+                Section("Transfer From") {
+                    Text("Rollover Balance")
+                }
+                
+                Section("Transfer To") {
+                    Picker("Destination", selection: $transferToGoal) {
+                        Text("Category").tag(false)
+                        Text("Savings Goal").tag(true)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    
+                    if transferToGoal {
+                        Picker("Select Goal", selection: $selectedGoalIndex) {
+                            ForEach(goals.indices, id: \.self) { index in
+                                Text(goals[index].title).tag(index)
+                            }
+                        }
+                    } else {
+                        Picker("Select Category", selection: $selectedCategoryIndex) {
+                            ForEach(categories.indices, id: \.self) { index in
+                                Text(categories[index].name).tag(index)
+                            }
                         }
                     }
                 }
-                Section("To") {
-                    Picker("Destination", selection: $toIndex) {
-                        Text("Rollover").tag(0)
-                        ForEach(categories.indices, id: \.self) { i in
-                            Text(categories[i].name).tag(i+1)
-                        }
-                    }
-                }
+                
                 Section("Amount") {
-                    TextField("Amount to Transfer", text: $amountString)
+                    TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
                 }
                 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
-                        .font(.footnote)
                 }
             }
             .navigationTitle("Transfer Funds")
@@ -1181,44 +1269,58 @@ struct TransferFundsView: View {
         }
     }
     
+    @State private var selectedGoalIndex = 0
+    @State private var selectedCategoryIndex = 0
+    
     private func performTransfer() {
-        guard let amt = Double(amountString), amt > 0 else {
-            errorMessage = "Please enter a positive amount."
-            return
-        }
-        if fromIndex == toIndex {
-            errorMessage = "Cannot transfer to the same source."
+        guard let amount = Double(amountString), amount > 0 else {
+            errorMessage = "Please enter a valid amount"
             return
         }
         
-        // Deduct from "from"
-        if fromIndex == 0 {
-            // from rollover
-            if amt > rolloverLeftover {
-                errorMessage = "Insufficient rollover leftover."
-                return
-            }
-            rolloverLeftover -= amt
-        } else {
-            let realFrom = fromIndex - 1
-            if amt > categories[realFrom].total {
-                errorMessage = "Not enough funds in \(categories[realFrom].name)."
-                return
-            }
-            categories[realFrom].total -= amt
+        guard amount <= rolloverLeftover else {
+            errorMessage = "Amount exceeds rollover balance"
+            return
         }
         
-        // Add to "to"
-        if toIndex == 0 {
-            rolloverLeftover += amt
+        if transferToGoal {
+            // Transfer to goal
+            goals[selectedGoalIndex].currentAmount += amount
         } else {
-            let realTo = toIndex - 1
-            categories[realTo].total += amt
+            // Transfer to category
+            categories[selectedCategoryIndex].total += amount
         }
         
+        rolloverLeftover -= amount
         dismiss()
     }
 }
+
+// MARK: - Data Helpers
+
+private func saveData<T: Encodable>(_ data: T, to filename: String) {
+    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(filename)
+    do {
+        let encodedData = try JSONEncoder().encode(data)
+        try encodedData.write(to: url)
+    } catch {
+        print("Error saving \(filename): \(error)")
+    }
+}
+
+private func loadData<T: Decodable>(_ type: T.Type, from filename: String) -> T? {
+    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(filename)
+    do {
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode(type, from: data)
+    } catch {
+        print("Error loading \(filename): \(error)")
+        return nil
+    }
+}
+
 
 #Preview {
     ContentView()

@@ -112,11 +112,30 @@ func monthlySpentByCategory(categories: [CategoryBudget], transactions: [Transac
 }
 
 /// leftover = (sum of all categories' totals) - (sum of amounts in month)
-func leftoverForMonth(allCategories: [CategoryBudget], monthTransactions: [Transaction]) -> Double {
-    let totalBudget = allCategories.reduce(0) { $0 + $1.total }
+/// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
+/// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
+func leftoverForMonth(
+    allCategories: [CategoryBudget],
+    allocations: [CategoryAllocation],
+    selectedMonth: Date,
+    monthTransactions: [Transaction]
+) -> Double {
+    // Filter allocations for the selected month
+    let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
+    
+    // Create a dictionary mapping categoryID to allocatedAmount
+    let allocatedAmountsByCategory = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
+    
+    // Calculate totalAllocated by using allocations if available, otherwise use category.total
+    let totalAllocated = allCategories.reduce(0) { $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total) }
+    
+    // Calculate total spent
     let spent = monthTransactions.map { $0.amount }.reduce(0, +)
-    return totalBudget - spent
+    
+    return totalAllocated - spent
 }
+
+
 
 /// A user-friendly Month+Year (e.g. "January 2025").
 fileprivate let monthYearFormatter: DateFormatter = {
@@ -131,17 +150,18 @@ fileprivate let monthYearFormatter: DateFormatter = {
 struct CategoryRow: View {
     let category: CategoryBudget
     let spentThisMonth: Double
+    let allocatedAmount: Double // Added this line
     
     private var fractionUsed: Double {
-        guard category.total > 0 else { return 0 }
-        let rawFrac = spentThisMonth / category.total
+        guard allocatedAmount > 0 else { return 0 }
+        let rawFrac = spentThisMonth / allocatedAmount
         return min(max(rawFrac, 0), 1)
     }
     private var fractionRemaining: Double {
         1 - fractionUsed
     }
     private var remainingDisplay: Double {
-        category.total - spentThisMonth
+        allocatedAmount - spentThisMonth
     }
     
     var body: some View {
@@ -161,7 +181,7 @@ struct CategoryRow: View {
                     
                     Spacer()
                     
-                    Text("\(Int(remainingDisplay)) / \(Int(category.total))")
+                    Text("\(Int(remainingDisplay)) / \(Int(allocatedAmount))")
                         .foregroundColor(.white)
                         .padding(.trailing, 8)
                 }
@@ -171,24 +191,19 @@ struct CategoryRow: View {
     }
 }
 
+
 /// An overall bar for all categories combined in a month.
 struct OverallBudgetRow: View {
-    let categories: [CategoryBudget]
-    let monthlySpentByCategory: [UUID: Double]
+    let totalAllocated: Double // Changed from categories and spent mapping
+    let totalSpent: Double
     
-    private var totalBudget: Double {
-        categories.reduce(0) { $0 + $1.total }
-    }
-    private var totalSpent: Double {
-        monthlySpentByCategory.values.reduce(0, +)
-    }
     private var fractionRemaining: Double {
-        guard totalBudget > 0 else { return 1 }
-        let usedFrac = totalSpent / totalBudget
+        guard totalAllocated > 0 else { return 1 }
+        let usedFrac = totalSpent / totalAllocated
         return max(0, 1 - usedFrac)
     }
     private var remaining: Double {
-        totalBudget - totalSpent
+        totalAllocated - totalSpent
     }
     
     var body: some View {
@@ -208,7 +223,7 @@ struct OverallBudgetRow: View {
                     
                     Spacer()
                     
-                    Text("\(Int(remaining)) / \(Int(totalBudget))")
+                    Text("\(Int(remaining)) / \(Int(totalAllocated))")
                         .foregroundColor(.white)
                         .padding(.trailing, 8)
                 }
@@ -217,6 +232,7 @@ struct OverallBudgetRow: View {
         .frame(height: 30)
     }
 }
+
 
 // MARK: - Calendar
 
@@ -716,7 +732,10 @@ struct RolloverBalanceCard: View {
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
     @Binding var goals: [SavingsGoal]
+    @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation]
     let overallBudget: Double
+    let selectedMonth: Date
     
     var body: some View {
         NavigationLink {
@@ -724,7 +743,10 @@ struct RolloverBalanceCard: View {
                 rolloverLeftover: $rolloverLeftover,
                 categories: $categories,
                 goals: $goals,
-                overallBudget: overallBudget
+                transactions: $transactions,
+                allocations: $allocations,
+                overallBudget: overallBudget,
+                selectedMonth: selectedMonth
             )
         } label: {
             HStack {
@@ -749,9 +771,71 @@ struct RolloverBalanceCard: View {
     }
 }
 
+//struct CategoriesCard: View {
+//    @Binding var categories: [CategoryBudget]
+//    @Binding var transactions: [Transaction]
+//    @Binding var allocations: [CategoryAllocation]
+//    let selectedMonth: Date
+//    
+//    private var monthlyTransactions: [Transaction] {
+//        transactionsForMonth(transactions, selectedMonth: selectedMonth)
+//    }
+//    
+//    private var spentByCategory: [UUID: Double] {
+//        monthlySpentByCategory(categories: categories, transactions: monthlyTransactions)
+//    }
+//    
+//    var body: some View {
+//        VStack(spacing: 8) {
+//            NavigationLink {
+//                AllTransactionsView(
+//                    transactions: $transactions,
+//                    categories: $categories,
+//                    selectedMonth: selectedMonth
+//                )
+//            } label: {
+//                HStack {
+//                    OverallBudgetRow(
+//                        categories: categories,
+//                        monthlySpentByCategory: spentByCategory
+//                    )
+//                    Image(systemName: "chevron.right")
+//                        .foregroundColor(.secondary)
+//                }
+//                .padding(.horizontal)
+//            }
+//            
+//            ForEach(categories) { cat in
+//                NavigationLink {
+//                    TransactionLogView(
+//                        category: cat,
+//                        transactions: transactions,
+//                        selectedMonth: selectedMonth
+//                    )
+//                } label: {
+//                    HStack {
+//                        CategoryRow(
+//                            category: cat,
+//                            spentThisMonth: spentByCategory[cat.id] ?? 0
+//                        )
+//                        Image(systemName: "chevron.right")
+//                            .foregroundColor(.secondary)
+//                    }
+//                    .padding(.horizontal)
+//                }
+//            }
+//        }
+//        .padding(.vertical)
+//        .background(Color(.systemBackground))
+//        .cornerRadius(10)
+//        .shadow(radius: 4)
+//        .padding(.horizontal)
+//    }
+//}
 struct CategoriesCard: View {
     @Binding var categories: [CategoryBudget]
     @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation] // Added this line
     let selectedMonth: Date
     
     private var monthlyTransactions: [Transaction] {
@@ -760,6 +844,29 @@ struct CategoriesCard: View {
     
     private var spentByCategory: [UUID: Double] {
         monthlySpentByCategory(categories: categories, transactions: monthlyTransactions)
+    }
+    
+    private var allocatedByCategory: [UUID: Double] {
+        let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
+        var result = [UUID: Double]()
+        
+        for cat in categories {
+            if let allocation = allocations.first(where: { $0.categoryID == cat.id && sameMonth($0.month, selectedMonth) }) {
+                result[cat.id] = allocation.allocatedAmount
+            } else {
+                result[cat.id] = cat.total
+            }
+        }
+        
+        return result
+    }
+
+    private var totalAllocated: Double {
+        allocatedByCategory.values.reduce(0, +)
+    }
+    
+    private var totalSpent: Double {
+        spentByCategory.values.reduce(0, +)
     }
     
     var body: some View {
@@ -773,8 +880,8 @@ struct CategoriesCard: View {
             } label: {
                 HStack {
                     OverallBudgetRow(
-                        categories: categories,
-                        monthlySpentByCategory: spentByCategory
+                        totalAllocated: totalAllocated,
+                        totalSpent: totalSpent
                     )
                     Image(systemName: "chevron.right")
                         .foregroundColor(.secondary)
@@ -793,7 +900,8 @@ struct CategoriesCard: View {
                     HStack {
                         CategoryRow(
                             category: cat,
-                            spentThisMonth: spentByCategory[cat.id] ?? 0
+                            spentThisMonth: spentByCategory[cat.id] ?? 0,
+                            allocatedAmount: allocatedByCategory[cat.id] ?? cat.total // Pass allocated amount
                         )
                         Image(systemName: "chevron.right")
                             .foregroundColor(.secondary)
@@ -867,6 +975,12 @@ struct ContentView: View {
         }
     }
     
+    @State private var allocations: [CategoryAllocation] = [] {
+        didSet {
+            saveData(allocations, to: "allocations.json")
+        }
+    }
+    
     @State private var transactions: [Transaction] = [] {
         didSet {
             saveData(transactions, to: "transactions.json")
@@ -879,8 +993,16 @@ struct ContentView: View {
     @State private var showMonthPicker = false
     
     private var overallBudget: Double {
-        categories.reduce(0) { $0 + $1.total }
+        // Filter allocations for the selected month
+        let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
+        
+        // Create a dictionary mapping categoryID to allocatedAmount
+        let allocatedAmountsByCategory = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
+        
+        // Calculate totalAllocated by using allocations if available, otherwise use category.total
+        return categories.reduce(0) { $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total) }
     }
+
     
     var body: some View {
         NavigationStack {
@@ -892,11 +1014,15 @@ struct ContentView: View {
                             rolloverLeftover: $rolloverLeftover,
                             categories: $categories,
                             goals: $goals,
-                            overallBudget: overallBudget
+                            transactions: $transactions,
+                            allocations: $allocations, // Added this line
+                            overallBudget: overallBudget,
+                            selectedMonth: selectedMonth
                         )
                         CategoriesCard(
                             categories: $categories,
                             transactions: $transactions,
+                            allocations: $allocations, // Added this line
                             selectedMonth: selectedMonth
                         )
                         CalendarCard(
@@ -904,8 +1030,10 @@ struct ContentView: View {
                             selectedMonth: selectedMonth
                         )
                     }
-                    .padding(.top)
+
+//                    .padding(.top, 8) // Reduced top padding from default to 8 points
                 }
+
                 
                 VStack {
                     Spacer()
@@ -950,9 +1078,16 @@ struct ContentView: View {
                 ]
             }
             
+            if let savedAllocations: [CategoryAllocation] = loadData([CategoryAllocation].self, from: "allocations.json") {
+                allocations = savedAllocations
+            } else {
+                allocations = [] // Initialize as empty or set default allocations if desired
+            }
+            
             loadGoals()
             updateRolloverLeftover()
         }
+
 
 
         .sheet(isPresented: $showSettings) {
@@ -971,42 +1106,45 @@ struct ContentView: View {
     }
     
     private func updateRolloverLeftover() {
-            // Define the starting point for the rollover balance (January 2024)
-            let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
-            
-            // Reset rollover to zero initially
-            rolloverLeftover = 0
-            
-            // Check if the selected month is before the starting point
-            guard selectedMonth >= startingPointDate else {
-                return // No rollover before the starting point
-            }
-            
-            // If the selected month is January 2024, start with zero rollover
-            if Calendar.current.isDate(selectedMonth, equalTo: startingPointDate, toGranularity: .month) {
-                rolloverLeftover = 0
-                return
-            }
-            
-            // Iterate backward from the selected month to calculate rollover
-            var currentMonth = selectedMonth
-            while currentMonth > startingPointDate {
-                guard let prevMonth = previousMonth(of: currentMonth) else { break }
-                
-                // Calculate leftover for the previous month
-                let prevMonthTransactions = transactionsForMonth(transactions, selectedMonth: prevMonth)
-                let prevMonthLeftover = leftoverForMonth(
-                    allCategories: categories,
-                    monthTransactions: prevMonthTransactions
-                )
-                
-                // Add to rollover balance
-                rolloverLeftover += prevMonthLeftover
-                
-                // Move to previous month
-                currentMonth = prevMonth
-            }
+        // Define the starting point for the rollover balance (January 2024)
+        let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        
+        // Reset rollover to zero initially
+        rolloverLeftover = 0
+        
+        // Check if the selected month is before the starting point
+        guard selectedMonth >= startingPointDate else {
+            return // No rollover before the starting point
         }
+        
+        // If the selected month is January 2024, start with zero rollover
+        if Calendar.current.isDate(selectedMonth, equalTo: startingPointDate, toGranularity: .month) {
+            rolloverLeftover = 0
+            return
+        }
+        
+        // Iterate backward from the selected month to calculate rollover
+        var currentMonth = selectedMonth
+        while currentMonth > startingPointDate {
+            guard let prevMonth = previousMonth(of: currentMonth) else { break }
+            
+            // Calculate leftover for the previous month using allocations
+            let prevMonthTransactions = transactionsForMonth(transactions, selectedMonth: prevMonth)
+            let prevMonthLeftover = leftoverForMonth(
+                allCategories: categories,
+                allocations: allocations, // Pass allocations
+                selectedMonth: prevMonth, // Pass selected month
+                monthTransactions: prevMonthTransactions
+            )
+            
+            // Add to rollover balance
+            rolloverLeftover += prevMonthLeftover
+            
+            // Move to previous month
+            currentMonth = prevMonth
+        }
+    }
+
     @AppStorage("savingsGoals") private var goalsData: Data = Data()
     @State private var goals: [SavingsGoal] = [] {
         didSet {
@@ -1153,6 +1291,15 @@ struct SavingsGoal: Identifiable, Codable {
     var currentAmount: Double
 }
 
+// Data model for per-month category allocations
+struct CategoryAllocation: Identifiable, Codable {
+    let id = UUID()
+    var categoryID: UUID
+    var month: Date // Should represent the first day of the month
+    var allocatedAmount: Double
+}
+
+
 
 // MARK: - Rollover Detail Screen
 
@@ -1162,7 +1309,10 @@ struct RolloverDetailView: View {
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
     @Binding var goals: [SavingsGoal]
+    @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation]
     let overallBudget: Double
+    let selectedMonth: Date
     
     @State private var showTransfer = false
     
@@ -1194,7 +1344,10 @@ struct RolloverDetailView: View {
                 TransferFundsView(
                     rolloverLeftover: $rolloverLeftover,
                     categories: $categories,
-                    goals: $goals
+                    goals: $goals,
+                    transactions: $transactions,
+                    allocations: $allocations,
+                    selectedMonth: selectedMonth
                 )
             }
         }
@@ -1209,11 +1362,35 @@ struct TransferFundsView: View {
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
     @Binding var goals: [SavingsGoal]
+    @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation] // Added this line
+    let selectedMonth: Date
     
     @State private var amountString = ""
     @State private var errorMessage = ""
     @State private var transferToGoal = false
 
+    @State private var selectedGoalIndex = 0
+    @State private var selectedCategoryIndex = 0
+    
+    // Computed Properties
+    private var computedMonthlySpentByCategory: [UUID: Double] { // Renamed to avoid conflict
+        monthlySpentByCategory(categories: categories, transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth))
+    }
+
+    private var selectedCategoryBalance: Double {
+        if categories.indices.contains(selectedCategoryIndex) {
+            let selectedCategory = categories[selectedCategoryIndex]
+            let spent = computedMonthlySpentByCategory[selectedCategory.id] ?? 0 // Updated reference
+            // Get allocated amount for the category in the selected month
+            let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
+            let allocation = allocations.first(where: { $0.categoryID == selectedCategory.id && sameMonth($0.month, selectedMonth) })
+            let allocatedAmount = allocation?.allocatedAmount ?? selectedCategory.total
+            return allocatedAmount - spent
+        }
+        return 0
+    }
+    
     var body: some View {
         NavigationStack {
             Form {
@@ -1234,11 +1411,27 @@ struct TransferFundsView: View {
                                 Text(goals[index].title).tag(index)
                             }
                         }
+                        .pickerStyle(.wheel) // Optional: specify picker style
+                        
+                        // Existing Remaining to Reach Goal Text
+                        if goals.indices.contains(selectedGoalIndex) {
+                            Text("Remaining to reach goal: \(goals[selectedGoalIndex].targetAmount - goals[selectedGoalIndex].currentAmount, format: .currency(code: "USD"))")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
                     } else {
                         Picker("Select Category", selection: $selectedCategoryIndex) {
                             ForEach(categories.indices, id: \.self) { index in
                                 Text(categories[index].name).tag(index)
                             }
+                        }
+                        .pickerStyle(.wheel) // Optional: specify picker style
+                        
+                        // Add Current Balance Text View
+                        if categories.indices.contains(selectedCategoryIndex) {
+                            Text("Current balance: \(selectedCategoryBalance, format: .currency(code: "USD"))")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -1251,6 +1444,7 @@ struct TransferFundsView: View {
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
+                        .font(.footnote)
                 }
             }
             .navigationTitle("Transfer Funds")
@@ -1269,9 +1463,6 @@ struct TransferFundsView: View {
         }
     }
     
-    @State private var selectedGoalIndex = 0
-    @State private var selectedCategoryIndex = 0
-    
     private func performTransfer() {
         guard let amount = Double(amountString), amount > 0 else {
             errorMessage = "Please enter a valid amount"
@@ -1288,7 +1479,15 @@ struct TransferFundsView: View {
             goals[selectedGoalIndex].currentAmount += amount
         } else {
             // Transfer to category
-            categories[selectedCategoryIndex].total += amount
+            let selectedCategory = categories[selectedCategoryIndex]
+            let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
+            
+            if let allocationIndex = allocations.firstIndex(where: { $0.categoryID == selectedCategory.id && sameMonth($0.month, selectedMonth) }) {
+                allocations[allocationIndex].allocatedAmount += amount
+            } else {
+                let newAllocation = CategoryAllocation(categoryID: selectedCategory.id, month: monthStart, allocatedAmount: selectedCategory.total + amount)
+                allocations.append(newAllocation)
+            }
         }
         
         rolloverLeftover -= amount
@@ -1325,7 +1524,3 @@ private func loadData<T: Decodable>(_ type: T.Type, from filename: String) -> T?
 #Preview {
     ContentView()
 }
-
-
-
-

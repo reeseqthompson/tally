@@ -144,6 +144,31 @@ fileprivate let monthYearFormatter: DateFormatter = {
     return df
 }()
 
+// MARK: - Amount Formatting Helper
+
+/// Formats a given amount:
+/// - No decimal places if less than $1,000.
+/// - One decimal place followed by 'K' if $1,000 or more.
+func formatAmount(_ amount: Double) -> String {
+    if amount >= 1000 {
+        let formatted = (amount / 1000).rounded(toPlaces: 1)
+        return "$\(formatted)k"
+    } else {
+        let formatted = Int(amount.rounded()) // Changed from Int(amount) to Int(amount.rounded())
+        return "$\(formatted)"
+    }
+}
+
+// Extension to round a Double to a specified number of decimal places.
+extension Double {
+    /// Rounds the double to decimal places value
+    func rounded(toPlaces places: Int) -> Double {
+        let divisor = pow(10.0, Double(places))
+        return (self * divisor).rounded() / divisor
+    }
+}
+
+
 // MARK: - Row Views
 
 /// Displays a bar comparing "spent" vs. "category.total."
@@ -181,7 +206,7 @@ struct CategoryRow: View {
                     
                     Spacer()
                     
-                    Text("\(Int(remainingDisplay)) / \(Int(allocatedAmount))")
+                    Text("\(formatAmount(remainingDisplay)) / \(formatAmount(allocatedAmount))")
                         .foregroundColor(.white)
                         .padding(.trailing, 8)
                 }
@@ -223,7 +248,7 @@ struct OverallBudgetRow: View {
                     
                     Spacer()
                     
-                    Text("\(Int(remaining)) / \(Int(totalAllocated))")
+                    Text("\(formatAmount(remaining)) / \(formatAmount(totalAllocated))")
                         .foregroundColor(.white)
                         .padding(.trailing, 8)
                 }
@@ -232,6 +257,44 @@ struct OverallBudgetRow: View {
         .frame(height: 30)
     }
 }
+
+// MARK: - Goal Card View
+
+struct GoalCardView: View {
+    @Binding var goal: SavingsGoal
+    var onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(goal.title)
+                    .font(.headline)
+                Spacer()
+                Text("\(formatAmount(goal.currentAmount)) / \(formatAmount(goal.targetAmount))")
+                    .font(.subheadline)
+            }
+
+            ProgressView(value: goal.currentAmount, total: goal.targetAmount)
+                .progressViewStyle(LinearProgressViewStyle())
+                .accentColor(.blue) // Optional: Customize the progress bar color
+
+//            HStack {
+//                Spacer()
+//                Button(action: onDelete) {
+//                    Image(systemName: "trash")
+//                        .foregroundColor(.red)
+//                }
+//                .buttonStyle(BorderlessButtonStyle()) // Ensures the button works inside lists or stacks
+//            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 4)
+        .padding(.horizontal)
+    }
+}
+
 
 
 // MARK: - Calendar
@@ -292,7 +355,7 @@ struct MonthlyCalendarView: View {
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                             if spent > 0 {
-                                Text(spent, format: .currency(code: "USD"))
+                                Text(formatAmount(spent))
                                     .font(.caption2)
                                     .foregroundColor(.red)
                             } else {
@@ -300,6 +363,7 @@ struct MonthlyCalendarView: View {
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
+
                         }
                         .frame(maxWidth: .infinity, minHeight: 40)
                     } else {
@@ -338,7 +402,7 @@ struct AllTransactionsView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(tx.description)
-                            Text(tx.amount, format: .currency(code: "USD"))
+                            Text(formatAmount(tx.amount))
                                 .foregroundColor(.secondary)
                                 .font(.footnote)
                             Text(tx.date, style: .date)
@@ -378,9 +442,10 @@ struct TransactionLogView: View {
         List(filteredTx) { t in
             VStack(alignment: .leading, spacing: 4) {
                 Text(t.description)
-                Text(t.amount, format: .currency(code: "USD"))
+                Text(formatAmount(t.amount))
                     .foregroundColor(.secondary)
                     .font(.footnote)
+
                 Text(t.date, style: .date)
                     .foregroundColor(.secondary)
                     .font(.footnote)
@@ -988,7 +1053,7 @@ struct ContentView: View {
     }
     @State private var selectedMonth = Date()
     @State private var rolloverLeftover: Double = 0
-    @State private var showSettings = false
+//    @State private var showSettings = false
     @State private var showRecordTransaction = false
     @State private var showMonthPicker = false
     
@@ -1041,17 +1106,41 @@ struct ContentView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape.fill")
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 40) { // Adjust spacing as needed for even distribution
+                        // Goals Icon
+                        NavigationLink(destination: GoalsView(goals: $goals)) {
+                            Image(systemName: "target")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                        }
+
+                        // Shared Goals Icon (Non-functional for now)
+                        Button(action: {
+                            // Future functionality for Shared Goals
+                        }) {
+                            Image(systemName: "person.2.fill")
+                                .font(.title2)
+                                .foregroundColor(.gray)
+                        }
+
+                        // Transactions Icon (Non-functional for now)
+                        Button(action: {
+                            // Future functionality for Transactions
+                        }) {
+                            Image(systemName: "list.bullet")
+                                .font(.title2)
+                                .foregroundColor(.gray)
+                        }
+
+                        // Settings Icon as NavigationLink
+                        NavigationLink(destination: SettingsView(categories: $categories)) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                        }
                     }
-                }
-                ToolbarItem(placement: .navigationBarLeading) { // Use a ToolbarItem for NavigationLink
-                    NavigationLink(destination: GoalsView(goals: $goals)) {
-                        Text("Goals").font(.headline).bold()
-                    }
+                    .frame(maxWidth: .infinity) // Ensures the HStack takes full width for even spacing
                 }
             }
 
@@ -1090,9 +1179,9 @@ struct ContentView: View {
 
 
 
-        .sheet(isPresented: $showSettings) {
-            SettingsView(categories: $categories)
-        }
+//        .sheet(isPresented: $showSettings) {
+//            SettingsView(categories: $categories)
+//        }
         .sheet(isPresented: $showRecordTransaction) {
             RecordTransactionView(
                 categories: $categories,
@@ -1182,26 +1271,23 @@ struct GoalsView: View {
         NavigationStack {
             VStack {
                 if goals.isEmpty {
+                    // Display a placeholder when there are no goals
                     ContentUnavailableView("No Goals", systemImage: "plus.circle")
+                        .padding()
                 } else {
-                    List {
-                        ForEach($goals) { $goal in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text(goal.title)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text("$\(goal.currentAmount, specifier: "%.2f") / $\(goal.targetAmount, specifier: "%.2f")")
-                                }
-                                
-                                ProgressView(value: goal.currentAmount, total: goal.targetAmount)
-                                    .progressViewStyle(LinearProgressViewStyle())
+                    // Use ScrollView with LazyVStack to display GoalCardViews
+                    ScrollView {
+                        LazyVStack(spacing: 16) {
+                            ForEach($goals) { $goal in
+                                GoalCardView(goal: $goal, onDelete: {
+                                    if let index = goals.firstIndex(where: { $0.id == goal.id }) {
+                                        goals.remove(at: index)
+                                    }
+                                })
                             }
-                            .padding(.vertical, 8)
                         }
-                        .onDelete { indexes in
-                            goals.remove(atOffsets: indexes)
-                        }
+                        .padding(.top, 16)
+                        .padding(.bottom, 16)
                     }
                 }
             }
@@ -1221,6 +1307,7 @@ struct GoalsView: View {
         }
     }
 }
+
 
 
 struct AddGoalView: View {

@@ -120,38 +120,35 @@ func monthlySpentByCategory(categories: [CategoryBudget], transactions: [Transac
     return result
 }
 
-/// leftover = (sum of all categories' totals) - (sum of amounts in month)
-/// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
-/// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
+
 func leftoverForMonth(
     monthlyBudgets: [String: [CategoryBudget]],
     allocations: [CategoryAllocation],
+    rolloverSpentByMonth: [String: Double],
     selectedMonth: Date,
     monthTransactions: [Transaction]
 ) -> Double {
-    // 1) Get the categories for this monthKey
     let key = monthKey(for: selectedMonth)
     let categoriesForMonth = monthlyBudgets[key] ?? []
 
-    // 2) Filter allocations for the selected month
+    // 1) sum allocated
     let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
-
-    // 3) Create a dictionary mapping categoryID -> allocatedAmount
-    let allocatedAmountsByCategory = Dictionary(
-        uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) }
-    )
-
-    // 4) Sum up total allocated for these categories
+    let allocatedDict = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
     let totalAllocated = categoriesForMonth.reduce(0) {
-        $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total)
+        $0 + (allocatedDict[$1.id] ?? $1.total)
     }
 
-    // 5) Calculate total spent
+    // 2) sum spent
     let spent = monthTransactions.map { $0.amount }.reduce(0, +)
 
-    // leftover = allocated minus spent
-    return totalAllocated - spent
+    // 3) leftover = allocated - spent
+    let leftover = totalAllocated - spent
+
+    // 4) also subtract any rolloverSpent recorded for this month
+    let rolloverSpent = rolloverSpentByMonth[key] ?? 0
+    return leftover - rolloverSpent
 }
+
 
 
 /// A user-friendly Month+Year (e.g. "January 2025").
@@ -638,14 +635,14 @@ struct SettingsView: View {
 }
 
 // MARK: - Record Transaction
-
 struct RecordTransactionView: View {
-    @Binding var categories: [CategoryBudget]
-    @Binding var transactions: [Transaction]
-    let refreshRollover: () -> Void // Add this line
+    let monthCategories: [CategoryBudget]    // <-- The categories for this month
+    @Binding var transactions: [Transaction] // Still binding, so you can append
+    let selectedMonth: Date
+    let refreshRollover: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var selectedCategoryIndex: Int = 0
     @State private var amountString: String = ""
     @State private var titleString: String = ""
@@ -656,17 +653,24 @@ struct RecordTransactionView: View {
         NavigationStack {
             Form {
                 Section("Category") {
-                    Picker("Choose Category", selection: $selectedCategoryIndex) {
-                        ForEach(categories.indices, id: \.self) { i in
-                            Text(categories[i].name).tag(i)
+                    if monthCategories.isEmpty {
+                        Text("No categories available for this month.")
+                    } else {
+                        Picker("Choose Category", selection: $selectedCategoryIndex) {
+                            ForEach(monthCategories.indices, id: \.self) { i in
+                                Text(monthCategories[i].name).tag(i)
+                            }
                         }
                     }
                 }
+
                 Section("Details") {
                     TextField("Transaction Title", text: $titleString)
-                    TextField("Amount", text: $amountString).keyboardType(.decimalPad)
+                    TextField("Amount", text: $amountString)
+                        .keyboardType(.decimalPad)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                 }
+
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
@@ -694,18 +698,29 @@ struct RecordTransactionView: View {
             errorMessage = "Please enter a valid amount."
             return
         }
+        guard !monthCategories.isEmpty else {
+            errorMessage = "No categories to select from."
+            return
+        }
+
+        // Grab the user’s chosen category
+        let chosenCategory = monthCategories[selectedCategoryIndex]
         
-        let catID = categories[selectedCategoryIndex].id
-        let newTx = Transaction(categoryID: catID, date: date, amount: amt, description: titleString)
+        // Create the transaction with that exact ID
+        let newTx = Transaction(
+            categoryID: chosenCategory.id,
+            date: date,
+            amount: amt,
+            description: titleString
+        )
         transactions.append(newTx)
-        
-        // Refresh rollover balance
-        refreshRollover() // Call the passed-in closure
+
+        // Refresh rollover if needed
+        refreshRollover()
 
         dismiss()
     }
 }
-
 
 // MARK: - Month Picker
 
@@ -823,6 +838,7 @@ struct MonthSelectorCard: View {
 }
 
 struct RolloverBalanceCard: View {
+    @Binding var monthlyBudgets: [String: [CategoryBudget]]
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
     @Binding var goals: [SavingsGoal]
@@ -831,17 +847,29 @@ struct RolloverBalanceCard: View {
     let overallBudget: Double
     let selectedMonth: Date
     
+    @Binding var rolloverSpentByMonth: [String: Double]
+    
+    let refreshRollover: () -> Void
+    
     var body: some View {
         NavigationLink {
-            RolloverDetailView(
-                rolloverLeftover: $rolloverLeftover,
-                categories: $categories,
-                goals: $goals,
-                transactions: $transactions,
-                allocations: $allocations,
-                overallBudget: overallBudget,
-                selectedMonth: selectedMonth
-            )
+            if let monthCategories = monthlyBudgets[monthKey(for: selectedMonth)], !monthCategories.isEmpty {
+                RolloverDetailView(
+                    rolloverLeftover: $rolloverLeftover,
+                    monthCategories: monthCategories,
+                    goals: $goals,
+                    transactions: $transactions,
+                    allocations: $allocations,
+                    overallBudget: overallBudget,
+                    selectedMonth: selectedMonth,
+                    rolloverSpentByMonth: $rolloverSpentByMonth,
+                    refreshRollover: refreshRollover
+                )
+
+            } else {
+                // Show some placeholder if there are no categories for this month:
+                Text("No categories found for this month.")
+            }
         } label: {
             HStack {
                 Text("Rollover Balance")
@@ -1126,6 +1154,8 @@ struct RecordTransactionButton: View {
 
 struct ContentView: View {
     
+    @State private var rolloverSpentByMonth: [String: Double] = [:]
+    
     @State private var categories: [CategoryBudget] = [
         CategoryBudget(name: "Housing", total: 2400, color: .yellow),
         CategoryBudget(name: "Transportation", total: 700, color: .green),
@@ -1190,13 +1220,18 @@ struct ContentView: View {
                     VStack(spacing: 16) {
                         MonthSelectorCard(selectedMonth: $selectedMonth)
                         RolloverBalanceCard(
+                            monthlyBudgets: $monthlyBudgets,
                             rolloverLeftover: $rolloverLeftover,
                             categories: $categories,
                             goals: $goals,
                             transactions: $transactions,
-                            allocations: $allocations, // Added this line
+                            allocations: $allocations,
                             overallBudget: overallBudget,
-                            selectedMonth: selectedMonth
+                            selectedMonth: selectedMonth,
+                            rolloverSpentByMonth: $rolloverSpentByMonth,
+                            refreshRollover: {
+                                updateRolloverLeftover()
+                            }
                         )
                         CategoriesCard(
                             monthlyBudgets: $monthlyBudgets,
@@ -1325,53 +1360,57 @@ struct ContentView: View {
             loadGoals()
             updateRolloverLeftover()
         }
-
-
-
-//        .sheet(isPresented: $showSettings) {
-//            SettingsView(categories: $categories)
-//        }
         .sheet(isPresented: $showRecordTransaction) {
-            RecordTransactionView(
-                categories: $categories,
-                transactions: $transactions,
-                refreshRollover: updateRolloverLeftover
-            )
+            let key = monthKey(for: selectedMonth)
+            if let categoriesForThisMonth = monthlyBudgets[key], !categoriesForThisMonth.isEmpty {
+                RecordTransactionView(
+                    monthCategories: categoriesForThisMonth,
+                    transactions: $transactions,
+                    selectedMonth: selectedMonth,
+                    refreshRollover: updateRolloverLeftover
+                )
+            } else {
+                // If there are NO categories for this month, you could display
+                // some placeholder view (or your "Create New Budget" flow):
+                Text("No categories for this month.")
+                    .padding()
+            }
         }
+
         .sheet(isPresented: $showMonthPicker) {
             MonthPickerView(selectedMonth: $selectedMonth)
         }
     }
     
-    private func updateRolloverLeftover() {
-        let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
-        
+    func updateRolloverLeftover() {
+        let startDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
         rolloverLeftover = 0
-        
-        guard selectedMonth >= startingPointDate else {
-            return
-        }
-        if Calendar.current.isDate(selectedMonth, equalTo: startingPointDate, toGranularity: .month) {
-            rolloverLeftover = 0
-            return
-        }
-        
-        var currentMonth = selectedMonth
-        while currentMonth > startingPointDate {
-            guard let prevMonth = previousMonth(of: currentMonth) else { break }
+
+        // If the current month is before the start date, no rollover.
+        guard selectedMonth >= startDate else { return }
+
+        // Start from the 'selectedMonth' and move backward through previous months
+        var loopMonth = selectedMonth
+        while loopMonth >= startDate {
+            // All transactions in this loopMonth
+            let monthTx = transactionsForMonth(transactions, selectedMonth: loopMonth)
             
-            let prevMonthTx = transactionsForMonth(transactions, selectedMonth: prevMonth)
-            let prevMonthLeftover = leftoverForMonth(
-                monthlyBudgets: monthlyBudgets,   // <--- CHANGED
+            // Calculate leftover for this loopMonth
+            let leftoverValue = leftoverForMonth(
+                monthlyBudgets: monthlyBudgets,
                 allocations: allocations,
-                selectedMonth: prevMonth,
-                monthTransactions: prevMonthTx
+                rolloverSpentByMonth: rolloverSpentByMonth,
+                selectedMonth: loopMonth,
+                monthTransactions: monthTx
             )
+            rolloverLeftover += leftoverValue
             
-            rolloverLeftover += prevMonthLeftover
-            currentMonth = prevMonth
+            // Move to previous month
+            guard let pm = previousMonth(of: loopMonth) else { break }
+            loopMonth = pm
         }
     }
+
 
     @AppStorage("savingsGoals") private var goalsData: Data = Data()
     @State private var goals: [SavingsGoal] = [] {
@@ -1582,12 +1621,17 @@ struct DailyTransactionsView: View {
 /// Also has a button to transfer funds from/to the rollover.
 struct RolloverDetailView: View {
     @Binding var rolloverLeftover: Double
-    @Binding var categories: [CategoryBudget]
+    let monthCategories: [CategoryBudget]
     @Binding var goals: [SavingsGoal]
     @Binding var transactions: [Transaction]
     @Binding var allocations: [CategoryAllocation]
     let overallBudget: Double
     let selectedMonth: Date
+    
+    @Binding var rolloverSpentByMonth: [String: Double]
+    
+    // ADD THIS:
+    let refreshRollover: () -> Void
     
     @State private var showTransfer = false
     
@@ -1618,13 +1662,16 @@ struct RolloverDetailView: View {
             .sheet(isPresented: $showTransfer) {
                 TransferFundsView(
                     rolloverLeftover: $rolloverLeftover,
-                    categories: $categories,
+                    monthCategories: monthCategories,
                     goals: $goals,
                     transactions: $transactions,
                     allocations: $allocations,
-                    selectedMonth: selectedMonth
+                    rolloverSpentByMonth: $rolloverSpentByMonth,
+                    selectedMonth: selectedMonth,
+                    refreshRollover: refreshRollover
                 )
             }
+
         }
     }
 }
@@ -1634,79 +1681,58 @@ struct RolloverDetailView: View {
 /// A single screen to transfer from Rollover or a category to Rollover or another category.
 struct TransferFundsView: View {
     @Environment(\.dismiss) private var dismiss
+    
     @Binding var rolloverLeftover: Double
-    @Binding var categories: [CategoryBudget]
+    
+    let monthCategories: [CategoryBudget]   // <-- The monthly categories
     @Binding var goals: [SavingsGoal]
     @Binding var transactions: [Transaction]
-    @Binding var allocations: [CategoryAllocation] // Added this line
+    @Binding var allocations: [CategoryAllocation]
+    
+    @Binding var rolloverSpentByMonth: [String: Double]
+    
     let selectedMonth: Date
     
     @State private var amountString = ""
     @State private var errorMessage = ""
     @State private var transferToGoal = false
-
+    
     @State private var selectedGoalIndex = 0
     @State private var selectedCategoryIndex = 0
     
-    // Computed Properties
-    private var computedMonthlySpentByCategory: [UUID: Double] { // Renamed to avoid conflict
-        monthlySpentByCategory(categories: categories, transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth))
-    }
-
-    private var selectedCategoryBalance: Double {
-        if categories.indices.contains(selectedCategoryIndex) {
-            let selectedCategory = categories[selectedCategoryIndex]
-            let spent = computedMonthlySpentByCategory[selectedCategory.id] ?? 0 // Updated reference
-            // Get allocated amount for the category in the selected month
-            let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
-            let allocation = allocations.first(where: { $0.categoryID == selectedCategory.id && sameMonth($0.month, selectedMonth) })
-            let allocatedAmount = allocation?.allocatedAmount ?? selectedCategory.total
-            return allocatedAmount - spent
-        }
-        return 0
-    }
+    let refreshRollover: () -> Void
     
     var body: some View {
         NavigationStack {
             Form {
                 Section("Transfer From") {
-                    Text("Rollover Balance")
+                    Text("Rollover Balance: $\(Int(rolloverLeftover))")
                 }
                 
                 Section("Transfer To") {
                     Picker("Destination", selection: $transferToGoal) {
                         Text("Category").tag(false)
-                        Text("Savings Goal").tag(true)
+                        Text("Goal").tag(true)
                     }
-                    .pickerStyle(SegmentedPickerStyle())
+                    .pickerStyle(.segmented)
                     
                     if transferToGoal {
+                        // Show goals
                         Picker("Select Goal", selection: $selectedGoalIndex) {
-                            ForEach(goals.indices, id: \.self) { index in
-                                Text(goals[index].title).tag(index)
+                            ForEach(goals.indices, id: \.self) { idx in
+                                Text(goals[idx].title).tag(idx)
                             }
-                        }
-                        .pickerStyle(.wheel) // Optional: specify picker style
-                        
-                        // Existing Remaining to Reach Goal Text
-                        if goals.indices.contains(selectedGoalIndex) {
-                            Text("Remaining to reach goal: \(goals[selectedGoalIndex].targetAmount - goals[selectedGoalIndex].currentAmount, format: .currency(code: "USD"))")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
                         }
                     } else {
-                        Picker("Select Category", selection: $selectedCategoryIndex) {
-                            ForEach(categories.indices, id: \.self) { index in
-                                Text(categories[index].name).tag(index)
+                        // Show monthly categories
+                        if monthCategories.isEmpty {
+                            Text("No categories for this month.")
+                        } else {
+                            Picker("Select Category", selection: $selectedCategoryIndex) {
+                                ForEach(monthCategories.indices, id: \.self) { idx in
+                                    Text(monthCategories[idx].name).tag(idx)
+                                }
                             }
-                        }
-                        .pickerStyle(.wheel) // Optional: specify picker style
-                        
-                        // Add Current Balance Text View
-                        if categories.indices.contains(selectedCategoryIndex) {
-                            Text("Current balance: \(selectedCategoryBalance, format: .currency(code: "USD"))")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -1719,53 +1745,74 @@ struct TransferFundsView: View {
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
-                        .font(.footnote)
                 }
             }
             .navigationTitle("Transfer Funds")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Transfer") {
-                        performTransfer()
-                    }
+                    Button("Transfer") { performTransfer() }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
             }
         }
     }
     
     private func performTransfer() {
+        // Validate
         guard let amount = Double(amountString), amount > 0 else {
-            errorMessage = "Please enter a valid amount"
+            errorMessage = "Please enter a valid amount."
             return
         }
-        
         guard amount <= rolloverLeftover else {
-            errorMessage = "Amount exceeds rollover balance"
+            errorMessage = "Amount exceeds current rollover."
             return
         }
         
         if transferToGoal {
-            // Transfer to goal
+            // Transfer from rollover to a goal
             goals[selectedGoalIndex].currentAmount += amount
-        } else {
-            // Transfer to category
-            let selectedCategory = categories[selectedCategoryIndex]
-            let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
             
-            if let allocationIndex = allocations.firstIndex(where: { $0.categoryID == selectedCategory.id && sameMonth($0.month, selectedMonth) }) {
-                allocations[allocationIndex].allocatedAmount += amount
+        } else {
+            // Transfer from rollover to a monthly category
+            guard !monthCategories.isEmpty else {
+                errorMessage = "No categories for this month."
+                return
+            }
+            let chosenCat = monthCategories[selectedCategoryIndex]
+            
+            // Find or create an allocation entry for that (catID, month)
+            if let i = allocations.firstIndex(where: {
+                $0.categoryID == chosenCat.id && sameMonth($0.month, selectedMonth)
+            }) {
+                // Already have an allocation for this category+month
+//                allocations[i].allocatedAmount += amount
             } else {
-                let newAllocation = CategoryAllocation(categoryID: selectedCategory.id, month: monthStart, allocatedAmount: selectedCategory.total + amount)
-                allocations.append(newAllocation)
+                // Create brand new allocation
+                let firstOfThisMonth = Calendar.current.date(
+                    from: Calendar.current.dateComponents([.year, .month], from: selectedMonth)
+                )!
+                allocations.append(CategoryAllocation(
+                    categoryID: chosenCat.id,
+                    month: firstOfThisMonth,
+                    allocatedAmount: chosenCat.total + amount
+                ))
             }
         }
         
+        // 1) figure out the key for the currently selected month
+        let key = monthKey(for: selectedMonth)
+
+        // 2) add to rolloverSpentByMonth
+        rolloverSpentByMonth[key, default: 0] += amount
+
+        // 3) (optional) also do the local immediate subtraction from rolloverLeftover
         rolloverLeftover -= amount
+        
+        // *** Immediately re-run leftover logic to update UI ***
+        refreshRollover()
+        
         dismiss()
     }
 }

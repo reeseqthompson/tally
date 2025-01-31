@@ -77,6 +77,15 @@ func sameMonth(_ d1: Date, _ d2: Date) -> Bool {
     return c1.year == c2.year && c1.month == c2.month
 }
 
+/// Return a simple "YYYY-MM" string for the date, ignoring day/time.
+func monthKey(for date: Date) -> String {
+    let comps = Calendar.current.dateComponents([.year, .month], from: date)
+    let y = comps.year ?? 2024
+    let m = comps.month ?? 1
+    return String(format: "%04d-%02d", y, m)
+}
+
+
 /// Return the Date for the *previous* month of `date` (keeping day=1).
 func previousMonth(of date: Date) -> Date? {
     var comps = Calendar.current.dateComponents([.year, .month], from: date)
@@ -115,26 +124,34 @@ func monthlySpentByCategory(categories: [CategoryBudget], transactions: [Transac
 /// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
 /// leftover = (sum of allocated amounts for all categories in the month) - (sum of amounts in month)
 func leftoverForMonth(
-    allCategories: [CategoryBudget],
+    monthlyBudgets: [String: [CategoryBudget]],
     allocations: [CategoryAllocation],
     selectedMonth: Date,
     monthTransactions: [Transaction]
 ) -> Double {
-    // Filter allocations for the selected month
+    // 1) Get the categories for this monthKey
+    let key = monthKey(for: selectedMonth)
+    let categoriesForMonth = monthlyBudgets[key] ?? []
+
+    // 2) Filter allocations for the selected month
     let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
-    
-    // Create a dictionary mapping categoryID to allocatedAmount
-    let allocatedAmountsByCategory = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
-    
-    // Calculate totalAllocated by using allocations if available, otherwise use category.total
-    let totalAllocated = allCategories.reduce(0) { $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total) }
-    
-    // Calculate total spent
+
+    // 3) Create a dictionary mapping categoryID -> allocatedAmount
+    let allocatedAmountsByCategory = Dictionary(
+        uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) }
+    )
+
+    // 4) Sum up total allocated for these categories
+    let totalAllocated = categoriesForMonth.reduce(0) {
+        $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total)
+    }
+
+    // 5) Calculate total spent
     let spent = monthTransactions.map { $0.amount }.reduce(0, +)
-    
+
+    // leftover = allocated minus spent
     return totalAllocated - spent
 }
-
 
 
 /// A user-friendly Month+Year (e.g. "January 2025").
@@ -298,10 +315,10 @@ struct GoalCardView: View {
 
 
 // MARK: - Calendar
-
 struct MonthlyCalendarView: View {
     let month: Date
     let transactions: [Transaction]
+    let categories: [CategoryBudget] // New parameter
     
     private let columns = Array(repeating: GridItem(.flexible(), alignment: .top), count: 7)
     private var calendar: Calendar {
@@ -332,42 +349,54 @@ struct MonthlyCalendarView: View {
     }
     
     private func spendingOnDay(_ date: Date) -> Double {
-        transactions.filter { calendar.isDate($0.date, inSameDayAs: date) }
+        transactions.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }
                     .map { $0.amount }
                     .reduce(0, +)
+    }
+    
+    private func transactionsForDay(_ day: Date) -> [Transaction] {
+        transactions.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
     }
     
     var body: some View {
         VStack(alignment: .leading) {
             LazyVGrid(columns: columns, spacing: 8) {
+                // Weekday headers
                 ForEach(["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], id: \.self) { wd in
                     Text(wd)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                 }
+                
+                // Day cells
                 ForEach(daysArray.indices, id: \.self) { i in
                     if let day = daysArray[i] {
                         let dNum = calendar.component(.day, from: day)
                         let spent = spendingOnDay(day)
-                        VStack(spacing: 4) {
-                            Text("\(dNum)")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            if spent > 0 {
-                                Text(formatAmount(spent))
-                                    .font(.caption2)
-                                    .foregroundColor(.red)
-                            } else {
-                                Text("$0")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                        NavigationLink(destination: DailyTransactionsView(
+                            date: day,
+                            transactions: transactionsForDay(day),
+                            categories: categories
+                        )) {
+                            VStack(spacing: 4) {
+                                Text("\(dNum)")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                if spent > 0 {
+                                    Text(formatAmount(spent))
+                                        .font(.caption2)
+                                        .foregroundColor(.red)
+                                } else {
+                                    Text("$0")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                             }
-
+                            .frame(maxWidth: .infinity, minHeight: 40)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 40)
                     } else {
-                        // placeholder
+                        // Placeholder for empty cells
                         Rectangle()
                             .foregroundColor(.clear)
                             .frame(minHeight: 40)
@@ -415,7 +444,7 @@ struct AllTransactionsView: View {
             }
             .onDelete(perform: deleteTransaction)
         }
-        .navigationTitle("\(monthYearFormatter.string(from: selectedMonth)) Budget")
+        .navigationTitle("\(monthYearFormatter.string(from: selectedMonth))")
     }
     
     private func deleteTransaction(at offsets: IndexSet) {
@@ -841,15 +870,15 @@ struct RolloverBalanceCard: View {
 //    @Binding var transactions: [Transaction]
 //    @Binding var allocations: [CategoryAllocation]
 //    let selectedMonth: Date
-//    
+//
 //    private var monthlyTransactions: [Transaction] {
 //        transactionsForMonth(transactions, selectedMonth: selectedMonth)
 //    }
-//    
+//
 //    private var spentByCategory: [UUID: Double] {
 //        monthlySpentByCategory(categories: categories, transactions: monthlyTransactions)
 //    }
-//    
+//
 //    var body: some View {
 //        VStack(spacing: 8) {
 //            NavigationLink {
@@ -869,7 +898,7 @@ struct RolloverBalanceCard: View {
 //                }
 //                .padding(.horizontal)
 //            }
-//            
+//
 //            ForEach(categories) { cat in
 //                NavigationLink {
 //                    TransactionLogView(
@@ -898,100 +927,170 @@ struct RolloverBalanceCard: View {
 //    }
 //}
 struct CategoriesCard: View {
-    @Binding var categories: [CategoryBudget]
+    @Binding var monthlyBudgets: [String: [CategoryBudget]]
     @Binding var transactions: [Transaction]
-    @Binding var allocations: [CategoryAllocation] // Added this line
+    @Binding var allocations: [CategoryAllocation] // <-- Add this line so we can see allocations
     let selectedMonth: Date
     
-    private var monthlyTransactions: [Transaction] {
-        transactionsForMonth(transactions, selectedMonth: selectedMonth)
-    }
-    
-    private var spentByCategory: [UUID: Double] {
-        monthlySpentByCategory(categories: categories, transactions: monthlyTransactions)
-    }
-    
-    private var allocatedByCategory: [UUID: Double] {
-        let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedMonth))!
-        var result = [UUID: Double]()
-        
-        for cat in categories {
-            if let allocation = allocations.first(where: { $0.categoryID == cat.id && sameMonth($0.month, selectedMonth) }) {
-                result[cat.id] = allocation.allocatedAmount
-            } else {
-                result[cat.id] = cat.total
-            }
-        }
-        
-        return result
-    }
-
-    private var totalAllocated: Double {
-        allocatedByCategory.values.reduce(0, +)
-    }
-    
-    private var totalSpent: Double {
-        spentByCategory.values.reduce(0, +)
-    }
-    
     var body: some View {
-        VStack(spacing: 8) {
-            NavigationLink {
-                AllTransactionsView(
-                    transactions: $transactions,
-                    categories: $categories,
-                    selectedMonth: selectedMonth
-                )
-            } label: {
-                HStack {
-                    OverallBudgetRow(
-                        totalAllocated: totalAllocated,
-                        totalSpent: totalSpent
-                    )
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal)
-            }
+        // We must compute these in `body`, rather than in property initializers
+        let key = monthKey(for: selectedMonth)
+        
+        // Filter all allocations for `selectedMonth`
+        let monthAllocs = allocations.filter { sameMonth($0.month, selectedMonth) }
+        
+        // Build a dictionary: categoryID -> allocatedAmount
+        let allocDict: [UUID: Double] = Dictionary(
+            uniqueKeysWithValues: monthAllocs.map { ($0.categoryID, $0.allocatedAmount) }
+        )
+        
+        // Check if we have categories for this month
+        if let monthCategories = monthlyBudgets[key], !monthCategories.isEmpty {
             
-            ForEach(categories) { cat in
+            // Show the standard categories list
+            let spentByCategory = monthlySpentByCategory(
+                categories: monthCategories,
+                transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
+            )
+            
+            // Sum total allocated across all categories
+            let totalAllocated = monthCategories.reduce(0) { acc, cat in
+                acc + (allocDict[cat.id] ?? cat.total)
+            }
+            let totalSpent = spentByCategory.values.reduce(0, +)
+            
+            VStack(spacing: 8) {
                 NavigationLink {
-                    TransactionLogView(
-                        category: cat,
-                        transactions: transactions,
+                    AllTransactionsView(
+                        transactions: .constant(transactions),
+                        categories: .constant(monthCategories),
                         selectedMonth: selectedMonth
                     )
                 } label: {
                     HStack {
-                        CategoryRow(
-                            category: cat,
-                            spentThisMonth: spentByCategory[cat.id] ?? 0,
-                            allocatedAmount: allocatedByCategory[cat.id] ?? cat.total // Pass allocated amount
+                        OverallBudgetRow(
+                            totalAllocated: totalAllocated,
+                            totalSpent: totalSpent
                         )
                         Image(systemName: "chevron.right")
                             .foregroundColor(.secondary)
                     }
                     .padding(.horizontal)
                 }
+                
+                ForEach(monthCategories) { cat in
+                    NavigationLink {
+                        TransactionLogView(
+                            category: cat,
+                            transactions: transactions,
+                            selectedMonth: selectedMonth
+                        )
+                    } label: {
+                        HStack {
+                            CategoryRow(
+                                category: cat,
+                                spentThisMonth: spentByCategory[cat.id] ?? 0,
+                                // use allocated if any, else cat.total
+                                allocatedAmount: allocDict[cat.id] ?? cat.total
+                            )
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal)
+                    }
+                }
             }
+            .padding(.vertical)
+            .background(Color(.systemBackground))
+            .cornerRadius(10)
+            .shadow(radius: 4)
+            .padding(.horizontal)
+            
+        } else {
+            // Show the "blank" state with two icons
+            VStack(spacing: 20) {
+                Text("No Budget for \(monthYearFormatter.string(from: selectedMonth))")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                HStack(spacing: 50) {
+                    // 1) Copy previous month’s categories
+                    Button {
+                        copyPreviousMonth()
+                    } label: {
+                        VStack {
+                            Image(systemName: "arrow.up.doc.on.clipboard")
+                                .font(.system(size: 36))
+                            Text("Copy Previous")
+                                .font(.subheadline)
+                        }
+                    }
+                    
+                    // 2) Create a new budget for this month
+                    Button {
+                        createNewBudget()
+                    } label: {
+                        VStack {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 36))
+                            Text("New Budget")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color(.systemBackground))
+            .cornerRadius(10)
+            .shadow(radius: 4)
+            .padding(.horizontal)
         }
-        .padding(.vertical)
-        .background(Color(.systemBackground))
-        .cornerRadius(10)
-        .shadow(radius: 4)
-        .padding(.horizontal)
+    }
+    
+    // Helper to copy the categories from the immediately preceding month
+    private func copyPreviousMonth() {
+        guard let prev = previousMonth(of: selectedMonth) else { return }
+        let prevKey = monthKey(for: prev)
+        let thisKey = monthKey(for: selectedMonth)
+        
+        // If the previous month exists, copy them.
+        if let prevCategories = monthlyBudgets[prevKey] {
+            // Make deep copies with new IDs
+            let newSet = prevCategories.map { oldCat in
+                CategoryBudget(
+                    id: UUID(),
+                    name: oldCat.name,
+                    total: oldCat.total,
+                    color: oldCat.color
+                )
+            }
+            monthlyBudgets[thisKey] = newSet
+        } else {
+            // If there's truly no data for the previous month, just make it empty
+            monthlyBudgets[thisKey] = []
+        }
+    }
+    
+    // Helper to create a brand-new budget (show a quick function or pass to a sheet, etc.)
+    private func createNewBudget() {
+        let thisKey = monthKey(for: selectedMonth)
+        // For now, we’ll just set it to an empty array.
+        monthlyBudgets[thisKey] = []
     }
 }
 
 struct CalendarCard: View {
     let transactions: [Transaction]
     let selectedMonth: Date
+    let categories: [CategoryBudget] // New parameter added
     
     var body: some View {
         VStack(spacing: 16) {
             MonthlyCalendarView(
                 month: selectedMonth,
-                transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth)
+                transactions: transactionsForMonth(transactions, selectedMonth: selectedMonth),
+                categories: categories // Passing categories
             )
             .padding(.top, 16)
             .padding(.bottom, 16)
@@ -1007,19 +1106,19 @@ struct RecordTransactionButton: View {
     @Binding var showRecordTransaction: Bool
     
     var body: some View {
-        GeometryReader { geo in
-            Button("Record Transaction") {
-                showRecordTransaction = true
-            }
-            .font(.title3)
-            .frame(width: geo.size.width - 32, height: 40)
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(10)
-            .padding(.horizontal, 16)
+        Button(action: {
+            showRecordTransaction = true
+        }) {
+            Text("Record Transaction")
+                .font(.headline) // Match category card's font
+                .foregroundColor(.white)
+                .padding(.horizontal, 100) // Internal padding for consistent spacing
+                .frame(minHeight: 35) // Increased height for prominence
+                .background(Color.blue)
+                .cornerRadius(10)
         }
-        .frame(height: 40)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 16)
+        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2) // Added shadow for consistency
     }
 }
 
@@ -1046,14 +1145,29 @@ struct ContentView: View {
         }
     }
     
+    /// A dictionary of "YYYY-MM" string -> array of CategoryBudget for that month.
+    /// Example key: "2024-12"
+    @State private var monthlyBudgets: [String: [CategoryBudget]] = [:] {
+        didSet {
+            saveData(monthlyBudgets, to: "monthlyBudgets.json")
+        }
+    }
+
     @State private var transactions: [Transaction] = [] {
         didSet {
             saveData(transactions, to: "transactions.json")
         }
     }
     @State private var selectedMonth = Date()
-    @State private var rolloverLeftover: Double = 0
-//    @State private var showSettings = false
+    @AppStorage("globalRolloverLeftover") private var storedRollover: Double = 0
+
+    @State private var rolloverLeftover: Double = 0 {
+        didSet {
+            // Each time this changes, save to AppStorage
+            storedRollover = rolloverLeftover
+        }
+    }
+
     @State private var showRecordTransaction = false
     @State private var showMonthPicker = false
     
@@ -1085,32 +1199,35 @@ struct ContentView: View {
                             selectedMonth: selectedMonth
                         )
                         CategoriesCard(
-                            categories: $categories,
+                            monthlyBudgets: $monthlyBudgets,
                             transactions: $transactions,
-                            allocations: $allocations, // Added this line
+                            allocations: $allocations, // Add this argument
                             selectedMonth: selectedMonth
                         )
+
                         CalendarCard(
                             transactions: transactions,
-                            selectedMonth: selectedMonth
+                            selectedMonth: selectedMonth,
+                            categories: categories // Passing categories
                         )
+
                     }
 
 //                    .padding(.top, 8) // Reduced top padding from default to 8 points
                 }
 
-                
-                VStack {
-                    Spacer()
-                    RecordTransactionButton(showRecordTransaction: $showRecordTransaction)
-                }
+                // just removed this REESE
+//                VStack {
+//                    Spacer()
+//                    RecordTransactionButton(showRecordTransaction: $showRecordTransaction)
+//                }
             }
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 40) { // Adjust spacing as needed for even distribution
                         // Goals Icon
                         NavigationLink(destination: GoalsView(goals: $goals)) {
-                            Image(systemName: "target")
+                            Image(systemName: "dollarsign.bank.building.fill")
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
@@ -1119,7 +1236,7 @@ struct ContentView: View {
                         Button(action: {
                             // Future functionality for Shared Goals
                         }) {
-                            Image(systemName: "person.2.fill")
+                            Image(systemName: "wallet.bifold.fill")
                                 .font(.title2)
                                 .foregroundColor(.gray)
                         }
@@ -1133,21 +1250,31 @@ struct ContentView: View {
                                 .foregroundColor(.gray)
                         }
 
-                        // Settings Icon as NavigationLink
+                        // In ContentView toolbar (where you have NavigationLink to SettingsView):
                         NavigationLink(destination: SettingsView(categories: $categories)) {
                             Image(systemName: "gearshape.fill")
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
+
                     }
                     .frame(maxWidth: .infinity) // Ensures the HStack takes full width for even spacing
                 }
+                // New ToolbarItem for the Record Transaction Button in the footer
+                    ToolbarItem(placement: .bottomBar) {
+                        RecordTransactionButton(showRecordTransaction: $showRecordTransaction)
+                    }
             }
 
             .navigationBarTitleDisplayMode(.large)
         }
         .onChange(of: selectedMonth) { _ in updateRolloverLeftover() }
         .onAppear {
+            
+            // Read back any previously-stored rollover
+            rolloverLeftover = storedRollover
+            
+
             if let savedTransactions: [Transaction] = loadData([Transaction].self, from: "transactions.json") {
                 transactions = savedTransactions
             } else {
@@ -1173,6 +1300,28 @@ struct ContentView: View {
                 allocations = [] // Initialize as empty or set default allocations if desired
             }
             
+            // 1) Load monthlyBudgets from disk
+            if let savedMonthlyBudgets: [String: [CategoryBudget]] = loadData([String: [CategoryBudget]].self,
+                                                                              from: "monthlyBudgets.json") {
+                monthlyBudgets = savedMonthlyBudgets
+            } else {
+                monthlyBudgets = [:]
+            }
+
+            // 2) If there's no record for 2024-12, create a default set
+            let dec2024key = "2024-12"
+            if monthlyBudgets[dec2024key] == nil {
+                monthlyBudgets[dec2024key] = [
+                    CategoryBudget(name: "Housing", total: 2400, color: .yellow),
+                    CategoryBudget(name: "Transportation", total: 700, color: .green),
+                    CategoryBudget(name: "Groceries", total: 900, color: .orange),
+                    CategoryBudget(name: "Healthcare", total: 200, color: .red),
+                    CategoryBudget(name: "Entertainment", total: 700, color: .purple),
+                    CategoryBudget(name: "Misc", total: 500, color: .brown)
+                ]
+            }
+
+            
             loadGoals()
             updateRolloverLeftover()
         }
@@ -1195,41 +1344,31 @@ struct ContentView: View {
     }
     
     private func updateRolloverLeftover() {
-        // Define the starting point for the rollover balance (January 2024)
         let startingPointDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
         
-        // Reset rollover to zero initially
         rolloverLeftover = 0
         
-        // Check if the selected month is before the starting point
         guard selectedMonth >= startingPointDate else {
-            return // No rollover before the starting point
+            return
         }
-        
-        // If the selected month is January 2024, start with zero rollover
         if Calendar.current.isDate(selectedMonth, equalTo: startingPointDate, toGranularity: .month) {
             rolloverLeftover = 0
             return
         }
         
-        // Iterate backward from the selected month to calculate rollover
         var currentMonth = selectedMonth
         while currentMonth > startingPointDate {
             guard let prevMonth = previousMonth(of: currentMonth) else { break }
             
-            // Calculate leftover for the previous month using allocations
-            let prevMonthTransactions = transactionsForMonth(transactions, selectedMonth: prevMonth)
+            let prevMonthTx = transactionsForMonth(transactions, selectedMonth: prevMonth)
             let prevMonthLeftover = leftoverForMonth(
-                allCategories: categories,
-                allocations: allocations, // Pass allocations
-                selectedMonth: prevMonth, // Pass selected month
-                monthTransactions: prevMonthTransactions
+                monthlyBudgets: monthlyBudgets,   // <--- CHANGED
+                allocations: allocations,
+                selectedMonth: prevMonth,
+                monthTransactions: prevMonthTx
             )
             
-            // Add to rollover balance
             rolloverLeftover += prevMonthLeftover
-            
-            // Move to previous month
             currentMonth = prevMonth
         }
     }
@@ -1240,7 +1379,7 @@ struct ContentView: View {
             saveGoals()
         }
     }
-
+    
     private func saveGoals() {
         do {
             let data = try JSONEncoder().encode(goals)
@@ -1386,6 +1525,55 @@ struct CategoryAllocation: Identifiable, Codable {
     var allocatedAmount: Double
 }
 
+// MARK: - Daily Transactions View
+
+struct DailyTransactionsView: View {
+    let date: Date
+    let transactions: [Transaction]
+    let categories: [CategoryBudget]
+    
+    // DateFormatter to display the date in a user-friendly format
+    fileprivate let dayFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateStyle = .long
+        return df
+    }()
+    
+    var body: some View {
+        List {
+            if transactions.isEmpty {
+                Text("No transactions for this day.")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(transactions) { tx in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(tx.description)
+                                .font(.headline)
+                            Text(tx.date, style: .time)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text(categoryName(for: tx.categoryID))
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(formatAmount(tx.amount))
+                            .foregroundColor(.red)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+//        .navigationTitle("Transactions on \(dayFormatter.string(from: date))")
+        .navigationTitle("\(dayFormatter.string(from: date))")
+    }
+    
+    /// Helper function to retrieve the category name based on categoryID
+    private func categoryName(for id: UUID) -> String {
+        categories.first(where: { $0.id == id })?.name ?? "Unknown Category"
+    }
+}
 
 
 // MARK: - Rollover Detail Screen
@@ -1608,6 +1796,17 @@ private func loadData<T: Decodable>(_ type: T.Type, from filename: String) -> T?
 }
 
 
+// Helpers:
+extension Date {
+    /// Returns a new Date at midnight on the first of this Date's month.
+    func startOfMonth() -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: self)
+        return cal.date(from: comps) ?? self
+    }
+}
+
 #Preview {
     ContentView()
 }
+

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		543190072D5154CA0080E9DD /* DESIGN.md in Resources */ = {isa = PBXBuildFile; fileRef = 543190052D5154CA0080E9DD /* DESIGN.md */; };
+		543190082D5154CA0080E9DD /* TODO.md in Resources */ = {isa = PBXBuildFile; fileRef = 543190062D5154CA0080E9DD /* TODO.md */; };
 		54F79F482D482A4F00C90408 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 54F79F472D482A4F00C90408 /* README.md */; };
 /* End PBXBuildFile section */
 
@@ -28,6 +30,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		543190052D5154CA0080E9DD /* DESIGN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DESIGN.md; sourceTree = "<group>"; };
+		543190062D5154CA0080E9DD /* TODO.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TODO.md; sourceTree = "<group>"; };
 		547919FB2D41FFFF005F00B6 /* tally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tally.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		54791A0C2D420001005F00B6 /* tallyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tallyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		54791A162D420001005F00B6 /* tallyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tallyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -85,6 +89,8 @@
 				54791A192D420001005F00B6 /* tallyUITests */,
 				547919FC2D41FFFF005F00B6 /* Products */,
 				54F79F472D482A4F00C90408 /* README.md */,
+				543190052D5154CA0080E9DD /* DESIGN.md */,
+				543190062D5154CA0080E9DD /* TODO.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -218,6 +224,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				543190072D5154CA0080E9DD /* DESIGN.md in Resources */,
+				543190082D5154CA0080E9DD /* TODO.md in Resources */,
 				54F79F482D482A4F00C90408 /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

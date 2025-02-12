@@ -134,9 +134,7 @@ func leftoverForMonth(
     // 1) sum allocated
     let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
     let allocatedDict = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
-    let totalAllocated = categoriesForMonth.reduce(0) {
-        $0 + (allocatedDict[$1.id] ?? $1.total)
-    }
+    let totalAllocated = categoriesForMonth.reduce(0) { $0 + $1.total }
 
     // 2) sum spent
     let spent = monthTransactions.map { $0.amount }.reduce(0, +)
@@ -728,7 +726,8 @@ struct MonthPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var selectedMonth: Date
     
-    private let years = Array(2020...2030)
+    // Restrict years to 2025 through 2030.
+    private let years = Array(2025...2030)
     private let months = Array(1...12)
     
     @State private var tempYear: Int = 2025
@@ -794,10 +793,16 @@ struct MonthPickerView: View {
     }
 }
 
+
 // MARK: - Component Cards
 
 struct MonthSelectorCard: View {
     @Binding var selectedMonth: Date
+    
+    // Define the minimum allowable date (January 2025)
+    var minDate: Date {
+        Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 1))!
+    }
     
     var body: some View {
         VStack {
@@ -810,7 +815,7 @@ struct MonthSelectorCard: View {
                     Image(systemName: "chevron.left")
                         .font(.title2)
                 }
-                
+                .disabled(selectedMonth <= minDate)
                 Spacer()
                 
                 Text(monthYearFormatter.string(from: selectedMonth))
@@ -1018,8 +1023,7 @@ struct CategoriesCard: View {
                             CategoryRow(
                                 category: cat,
                                 spentThisMonth: spentByCategory[cat.id] ?? 0,
-                                // use allocated if any, else cat.total
-                                allocatedAmount: allocDict[cat.id] ?? cat.total
+                                allocatedAmount: cat.total + (allocDict[cat.id] ?? 0)
                             )
                             Image(systemName: "chevron.right")
                                 .foregroundColor(.secondary)
@@ -1202,15 +1206,17 @@ struct ContentView: View {
     @State private var showMonthPicker = false
     
     private var overallBudget: Double {
-        // Filter allocations for the selected month
-        let allocatedCategories = allocations.filter { sameMonth($0.month, selectedMonth) }
-        
-        // Create a dictionary mapping categoryID to allocatedAmount
-        let allocatedAmountsByCategory = Dictionary(uniqueKeysWithValues: allocatedCategories.map { ($0.categoryID, $0.allocatedAmount) })
-        
-        // Calculate totalAllocated by using allocations if available, otherwise use category.total
-        return categories.reduce(0) { $0 + (allocatedAmountsByCategory[$1.id] ?? $1.total) }
+        // Build a dictionary of transfers for the selected month keyed by category.
+        let allocDict = Dictionary(
+            uniqueKeysWithValues: allocations.filter { sameMonth($0.month, selectedMonth) }
+                                             .map { ($0.categoryID, $0.allocatedAmount) }
+        )
+        // For each category, add its base total plus any transferred funds.
+        return categories.reduce(0) { sum, cat in
+            sum + (cat.total + (allocDict[cat.id] ?? 0))
+        }
     }
+
 
     
     var body: some View {
@@ -1343,10 +1349,10 @@ struct ContentView: View {
                 monthlyBudgets = [:]
             }
 
-            // 2) If there's no record for 2024-12, create a default set
-            let dec2024key = "2024-12"
-            if monthlyBudgets[dec2024key] == nil {
-                monthlyBudgets[dec2024key] = [
+            // Ensure December 2024 has a default budget.
+            let dec2024Key = "2024-12"
+            if monthlyBudgets[dec2024Key] == nil {
+                monthlyBudgets[dec2024Key] = [
                     CategoryBudget(name: "Housing", total: 2400, color: .yellow),
                     CategoryBudget(name: "Transportation", total: 700, color: .green),
                     CategoryBudget(name: "Groceries", total: 900, color: .orange),
@@ -1356,6 +1362,31 @@ struct ContentView: View {
                 ]
             }
 
+            // Initialize January 2025 with December 2024's budget if it doesn't exist.
+            let jan2025Key = "2025-01"
+            if monthlyBudgets[jan2025Key] == nil {
+                if let decBudget = monthlyBudgets[dec2024Key] {
+                    let newBudget = decBudget.map { oldCat in
+                        CategoryBudget(
+                            id: UUID(),  // Assign a new unique ID
+                            name: oldCat.name,
+                            total: oldCat.total,
+                            color: oldCat.color
+                        )
+                    }
+                    monthlyBudgets[jan2025Key] = newBudget
+                } else {
+                    // Fallback default if December 2024 budget is missing
+                    monthlyBudgets[jan2025Key] = [
+                        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
+                        CategoryBudget(name: "Transportation", total: 700, color: .green),
+                        CategoryBudget(name: "Groceries", total: 900, color: .orange),
+                        CategoryBudget(name: "Healthcare", total: 200, color: .red),
+                        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
+                        CategoryBudget(name: "Misc", total: 500, color: .brown)
+                    ]
+                }
+            }
             
             loadGoals()
             updateRolloverLeftover()
@@ -1383,33 +1414,41 @@ struct ContentView: View {
     }
     
     func updateRolloverLeftover() {
-        let startDate = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        // Set the base date to January 2025
+        let startDate = Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 1))!
+        
+        // If the selected month IS January 2025, then no rollover is carried over.
+        if selectedMonth == startDate {
+            rolloverLeftover = 0
+            return
+        }
+        
         rolloverLeftover = 0
-
-        // If the current month is before the start date, no rollover.
-        guard selectedMonth >= startDate else { return }
-
-        // Start from the 'selectedMonth' and move backward through previous months
         var loopMonth = selectedMonth
-        while loopMonth >= startDate {
-            // All transactions in this loopMonth
-            let monthTx = transactionsForMonth(transactions, selectedMonth: loopMonth)
+        // Process only months later than January 2025
+        while loopMonth > startDate {
+            // Use previous month’s transactions only if the previous month is on or after January 2025.
+            if let prev = previousMonth(of: loopMonth), prev >= startDate {
+                let monthTx = transactionsForMonth(transactions, selectedMonth: prev)
+                let leftoverValue = leftoverForMonth(
+                    monthlyBudgets: monthlyBudgets,
+                    allocations: allocations,
+                    rolloverSpentByMonth: rolloverSpentByMonth,
+                    selectedMonth: loopMonth,
+                    monthTransactions: monthTx
+                )
+                rolloverLeftover += leftoverValue
+            }
             
-            // Calculate leftover for this loopMonth
-            let leftoverValue = leftoverForMonth(
-                monthlyBudgets: monthlyBudgets,
-                allocations: allocations,
-                rolloverSpentByMonth: rolloverSpentByMonth,
-                selectedMonth: loopMonth,
-                monthTransactions: monthTx
-            )
-            rolloverLeftover += leftoverValue
-            
-            // Move to previous month
-            guard let pm = previousMonth(of: loopMonth) else { break }
-            loopMonth = pm
+            // Move one month back; if that goes before January 2025, break out.
+            if let newLoop = previousMonth(of: loopMonth), newLoop >= startDate {
+                loopMonth = newLoop
+            } else {
+                break
+            }
         }
     }
+
 
 
     @AppStorage("savingsGoals") private var goalsData: Data = Data()
@@ -1786,8 +1825,8 @@ struct TransferFundsView: View {
             if let i = allocations.firstIndex(where: {
                 $0.categoryID == chosenCat.id && sameMonth($0.month, selectedMonth)
             }) {
-                // Already have an allocation for this category+month
-//                allocations[i].allocatedAmount += amount
+                // Update the allocation by adding the new amount
+                allocations[i].allocatedAmount += amount
             } else {
                 // Create brand new allocation
                 let firstOfThisMonth = Calendar.current.date(
@@ -1796,9 +1835,10 @@ struct TransferFundsView: View {
                 allocations.append(CategoryAllocation(
                     categoryID: chosenCat.id,
                     month: firstOfThisMonth,
-                    allocatedAmount: chosenCat.total + amount
+                    allocatedAmount: amount
                 ))
             }
+
         }
         
         // 1) figure out the key for the currently selected month
@@ -1856,4 +1896,5 @@ extension Date {
 #Preview {
     ContentView()
 }
+
 

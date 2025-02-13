@@ -1192,6 +1192,8 @@ struct RecordTransactionButton: View {
 
 struct ContentView: View {
     
+    @Environment(\.scenePhase) var scenePhase
+    
     @State private var rolloverSpentByMonth: [String: Double] = [:]
     
     @State private var categories: [CategoryBudget] = [
@@ -1222,6 +1224,16 @@ struct ContentView: View {
 
     @State private var showRecordTransaction = false
     @State private var showMonthPicker = false
+
+    // Call this function to save all your main data arrays.
+    func saveAllData() {
+        saveData(categories, filename: "categories.json")
+        saveData(allocations, filename: "allocations.json")
+        saveData(monthlyBudgets, filename: "monthlyBudgets.json")
+        saveData(transactions, filename: "transactions.json")
+        saveData(savingsRecords, filename: "savingsRecords.json")
+    }
+
     
     private var overallBudget: Double {
         // Build a dictionary of transfers for the selected month keyed by category.
@@ -1326,12 +1338,37 @@ struct ContentView: View {
 
             .navigationBarTitleDisplayMode(.large)
         }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .inactive || newPhase == .background {
+                saveAllData()
+            }
+        }
+
         .onChange(of: selectedMonth) { _ in updateRolloverLeftover() }
         .onAppear {
+            // Load persisted data or use defaults if not present.
+            if let loadedCategories = loadData(filename: "categories.json", as: [CategoryBudget].self) {
+                categories = loadedCategories
+            }
             
-            // Read back any previously-stored rollover
+            if let loadedAllocations = loadData(filename: "allocations.json", as: [CategoryAllocation].self) {
+                allocations = loadedAllocations
+            }
+            
+            if let loadedMonthlyBudgets = loadData(filename: "monthlyBudgets.json", as: [String: [CategoryBudget]].self) {
+                monthlyBudgets = loadedMonthlyBudgets
+            }
+            
+            if let loadedTransactions = loadData(filename: "transactions.json", as: [Transaction].self) {
+                transactions = loadedTransactions
+            }
+            
+            if let loadedSavingsRecords = loadData(filename: "savingsRecords.json", as: [SavingsRecord].self) {
+                savingsRecords = loadedSavingsRecords
+            }
+            
             rolloverLeftover = storedRollover
-            
+
             // Ensure December 2024 has a default budget.
             let dec2024Key = "2024-12"
             if monthlyBudgets[dec2024Key] == nil {

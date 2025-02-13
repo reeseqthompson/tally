@@ -4,7 +4,7 @@
 this document records todo & status comments on the progress of this project and should be updated before taking any substantial development break. This includes updates for git commits, but also intermediate updates to note issues & updates.
 
 ## Status
-- I think all the allocations and transactions and savings are working correctly (except for the stuff noted below) but i didn't look super close at anything or really test much. Added transaction log page to view logs easier.
+- I think all the allocations and transactions and savings are working correctly (except for the stuff noted below) but i didn't look super close at anything or really test much.
 
 ## Known Bugs
 - nothing saves when I close the app at all (need to restructure to use classes & SwiftData)

@@ -66,6 +66,30 @@ struct CategoryBudget: Identifiable, Codable {
     }
 }
 
+// Data model for savings goals
+struct SavingsGoal: Identifiable, Codable {
+    var id = UUID()
+    var title: String
+    var targetAmount: Double
+    var currentAmount: Double
+}
+
+// Data model for per-month category allocations
+struct CategoryAllocation: Identifiable, Codable {
+    let id = UUID()
+    var categoryID: UUID
+    var month: Date // Should represent the first day of the month
+    var allocatedAmount: Double
+}
+
+struct SavingsRecord: Identifiable, Codable {
+    let id = UUID()
+    var goalID: UUID
+    var date: Date
+    var amount: Double
+    var description: String
+}
+
 
 // MARK: - Global Helpers
 
@@ -1550,30 +1574,6 @@ struct AddGoalView: View {
     }
 }
 
-
-// Data model for savings goals
-struct SavingsGoal: Identifiable, Codable {
-    var id = UUID()
-    var title: String
-    var targetAmount: Double
-    var currentAmount: Double
-}
-
-// Data model for per-month category allocations
-struct CategoryAllocation: Identifiable, Codable {
-    let id = UUID()
-    var categoryID: UUID
-    var month: Date // Should represent the first day of the month
-    var allocatedAmount: Double
-}
-
-struct SavingsRecord: Identifiable, Codable {
-    let id = UUID()
-    var goalID: UUID
-    var date: Date
-    var amount: Double
-    var description: String
-}
 
 // MARK: - Daily Transactions View
 

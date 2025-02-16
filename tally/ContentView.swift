@@ -1123,14 +1123,24 @@ struct CategoriesCard: View {
         // If the previous month exists, copy them.
         if let prevCategories = monthlyBudgets[prevKey] {
             // Make deep copies with new IDs
+//            let newSet = prevCategories.map { oldCat in
+//                CategoryBudget(
+//                    id: UUID(),
+//                    name: oldCat.name,
+//                    total: oldCat.total,
+//                    color: oldCat.color
+//                )
+//            }
+            // After: reusing the same IDs
             let newSet = prevCategories.map { oldCat in
                 CategoryBudget(
-                    id: UUID(),
+                    id: oldCat.id,
                     name: oldCat.name,
                     total: oldCat.total,
                     color: oldCat.color
                 )
             }
+
             monthlyBudgets[thisKey] = newSet
         } else {
             // If there's truly no data for the previous month, just make it empty
@@ -1232,6 +1242,8 @@ struct ContentView: View {
         saveData(monthlyBudgets, filename: "monthlyBudgets.json")
         saveData(transactions, filename: "transactions.json")
         saveData(savingsRecords, filename: "savingsRecords.json")
+        saveData(goals, filename: "savingsGoals.json")
+        saveData(rolloverSpentByMonth, filename: "rolloverSpentByMonth.json")
     }
 
     
@@ -1280,7 +1292,7 @@ struct ContentView: View {
                         CalendarCard(
                             transactions: transactions,
                             selectedMonth: selectedMonth,
-                            categories: categories // Passing categories
+                            categories: monthlyBudgets[monthKey(for: selectedMonth)] ?? categories
                         )
 
                     }
@@ -1314,11 +1326,19 @@ struct ContentView: View {
                         }
 
                         // Transactions Icon (Navigates to All Data View)
-                        NavigationLink(destination: TransactionsAndAllocationsView(transactions: transactions, allocations: allocations, savingsRecords: savingsRecords)) {
+                        NavigationLink(destination: TransactionsAndAllocationsView(
+                            transactions: $transactions,
+                            allocations: $allocations,
+                            savingsRecords: $savingsRecords,
+                            goals: $goals,
+                            categories: $categories,
+                            monthlyBudgets: $monthlyBudgets
+                        )) {
                             Image(systemName: "list.bullet")
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
+
 
                         // In ContentView toolbar (where you have NavigationLink to SettingsView):
                         NavigationLink(destination: SettingsView(categories: $categories)) {
@@ -1346,6 +1366,9 @@ struct ContentView: View {
 
         .onChange(of: selectedMonth) { _ in updateRolloverLeftover() }
         .onAppear {
+            
+            loadGoals()
+            
             // Load persisted data or use defaults if not present.
             if let loadedCategories = loadData(filename: "categories.json", as: [CategoryBudget].self) {
                 categories = loadedCategories
@@ -1367,19 +1390,17 @@ struct ContentView: View {
                 savingsRecords = loadedSavingsRecords
             }
             
+            if let loadedRolloverSpent = loadData(filename: "rolloverSpentByMonth.json", as: [String: Double].self) {
+                rolloverSpentByMonth = loadedRolloverSpent
+            }
+
+            
             rolloverLeftover = storedRollover
 
             // Ensure December 2024 has a default budget.
             let dec2024Key = "2024-12"
             if monthlyBudgets[dec2024Key] == nil {
-                monthlyBudgets[dec2024Key] = [
-                    CategoryBudget(name: "Housing", total: 2400, color: .yellow),
-                    CategoryBudget(name: "Transportation", total: 700, color: .green),
-                    CategoryBudget(name: "Groceries", total: 900, color: .orange),
-                    CategoryBudget(name: "Healthcare", total: 200, color: .red),
-                    CategoryBudget(name: "Entertainment", total: 700, color: .purple),
-                    CategoryBudget(name: "Misc", total: 500, color: .brown)
-                ]
+                monthlyBudgets[dec2024Key] = categories
             }
 
             // Initialize January 2025 with December 2024's budget if it doesn't exist.
@@ -1388,7 +1409,7 @@ struct ContentView: View {
                 if let decBudget = monthlyBudgets[dec2024Key] {
                     let newBudget = decBudget.map { oldCat in
                         CategoryBudget(
-                            id: UUID(),  // Assign a new unique ID
+                            id: oldCat.id,  // Assign a new unique ID
                             name: oldCat.name,
                             total: oldCat.total,
                             color: oldCat.color
@@ -1476,28 +1497,39 @@ struct ContentView: View {
 
 
 
-    @AppStorage("savingsGoals") private var goalsData: Data = Data()
-    @State private var goals: [SavingsGoal] = [] {
-        didSet {
-            saveGoals()
-        }
-    }
+//    @AppStorage("savingsGoals") private var goalsData: Data = Data()
+//    @State private var goals: [SavingsGoal] = [] {
+//        didSet {
+//            saveGoals()
+//        }
+//    }
+    @State private var goals: [SavingsGoal] = []
+
+//    private func saveGoals() {
+//        do {
+//            let data = try JSONEncoder().encode(goals)
+//            goalsData = data
+//        } catch {
+//            print("Error saving goals: \(error)")
+//        }
+//    }
+//
+//    private func loadGoals() {
+//        guard !goalsData.isEmpty else { return }
+//        do {
+//            goals = try JSONDecoder().decode([SavingsGoal].self, from: goalsData)
+//        } catch {
+//            print("Error loading goals: \(error)")
+//        }
+//    }
     
     private func saveGoals() {
-        do {
-            let data = try JSONEncoder().encode(goals)
-            goalsData = data
-        } catch {
-            print("Error saving goals: \(error)")
-        }
+        saveData(goals, filename: "savingsGoals.json")
     }
 
     private func loadGoals() {
-        guard !goalsData.isEmpty else { return }
-        do {
-            goals = try JSONDecoder().decode([SavingsGoal].self, from: goalsData)
-        } catch {
-            print("Error loading goals: \(error)")
+        if let loadedGoals = loadData(filename: "savingsGoals.json", as: [SavingsGoal].self) {
+            goals = loadedGoals
         }
     }
 
@@ -1816,9 +1848,21 @@ struct TransferFundsView: View {
         }
         
         if transferToGoal {
+            let selectedGoal = goals[selectedGoalIndex]
+            // Check if the goal is already reached
+            if selectedGoal.currentAmount >= selectedGoal.targetAmount {
+                errorMessage = "This goal has already reached its target."
+                return
+            }
+            // Check if the transfer would exceed the goal's target
+            if selectedGoal.currentAmount + amount > selectedGoal.targetAmount {
+                errorMessage = "Transfer amount exceeds the goal's target."
+                return
+            }
+            // Proceed with the transfer if validations pass
             goals[selectedGoalIndex].currentAmount += amount
             // Add a savings record for this transfer.
-            let newRecord = SavingsRecord(goalID: goals[selectedGoalIndex].id, date: Date(), amount: amount, description: "Transfer from rollover")
+            let newRecord = SavingsRecord(goalID: selectedGoal.id, date: Date(), amount: amount, description: "Transfer from rollover")
             savingsRecords.append(newRecord)
         } else {
             guard !monthCategories.isEmpty else {
@@ -1855,9 +1899,13 @@ struct TransferFundsView: View {
 
 
 struct TransactionsAndAllocationsView: View {
-    let transactions: [Transaction]
-    let allocations: [CategoryAllocation]
-    let savingsRecords: [SavingsRecord]
+    @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation]
+    @Binding var savingsRecords: [SavingsRecord]
+    @Binding var goals: [SavingsGoal]
+    @Binding var categories: [CategoryBudget]
+    @Binding var monthlyBudgets: [String: [CategoryBudget]]
+    
     
     @State private var selectedSegment = 0
     
@@ -1872,6 +1920,49 @@ struct TransactionsAndAllocationsView: View {
     var sortedSavings: [SavingsRecord] {
         savingsRecords.sorted { $0.date < $1.date }
     }
+    
+    private func deleteTransaction(at offsets: IndexSet) {
+        for index in offsets {
+            let txToDelete = sortedTransactions[index]
+            if let originalIndex = transactions.firstIndex(where: { $0.id == txToDelete.id }) {
+                transactions.remove(at: originalIndex)
+            }
+        }
+        // Optionally, persist immediately:
+        // saveAllData()
+    }
+
+    private func deleteAllocation(at offsets: IndexSet) {
+        for index in offsets {
+            let allocToDelete = sortedAllocations[index]
+            if let originalIndex = allocations.firstIndex(where: { $0.id == allocToDelete.id }) {
+                allocations.remove(at: originalIndex)
+            }
+        }
+        // Optionally, persist immediately:
+        // saveAllData()
+    }
+
+    private func deleteSavingsRecord(at offsets: IndexSet) {
+        for index in offsets {
+            let recordToDelete = sortedSavings[index]
+            if let originalIndex = savingsRecords.firstIndex(where: { $0.id == recordToDelete.id }) {
+                savingsRecords.remove(at: originalIndex)
+            }
+            // Update the corresponding savings goal
+            if let goalIndex = goals.firstIndex(where: { $0.id == recordToDelete.goalID }) {
+                goals[goalIndex].currentAmount -= recordToDelete.amount
+                // Ensure the currentAmount does not go negative.
+                if goals[goalIndex].currentAmount < 0 {
+                    goals[goalIndex].currentAmount = 0
+                }
+            }
+        }
+        // Optionally, persist immediately:
+        // saveAllData()
+    }
+
+
     
     var body: some View {
         VStack {
@@ -1898,39 +1989,46 @@ struct TransactionsAndAllocationsView: View {
                             }
                             .padding(.vertical, 4)
                         }
+                        .onDelete(perform: deleteTransaction)
                     }
                 } else if selectedSegment == 1 {
                     Section(header: Text("Allocations").font(.headline)) {
                         ForEach(sortedAllocations) { alloc in
+                            // Get the month key for this allocation.
+                            let allocKey = monthKey(for: alloc.month)
+                            // Try to find the category in the monthly budgets for that month.
+                            let categoryName = (monthlyBudgets[allocKey]?.first(where: { $0.id == alloc.categoryID })?.name)
+                                ?? (categories.first(where: { $0.id == alloc.categoryID })?.name)
+                                ?? "Unknown Category"
+                            let monthString = monthYearFormatter.string(from: alloc.month)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Category ID: \(alloc.categoryID.uuidString.prefix(8))")
+                                Text("\(monthString) \(categoryName)")
                                 Text("Allocated: \(formatAmount(alloc.allocatedAmount))")
                                     .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Text(alloc.month, style: .date)
-                                    .font(.footnote)
                                     .foregroundColor(.secondary)
                             }
                             .padding(.vertical, 4)
                         }
+                        .onDelete(perform: deleteAllocation)
                     }
                 } else if selectedSegment == 2 {
                     Section(header: Text("Savings").font(.headline)) {
                         ForEach(sortedSavings) { record in
+                            // Look up the savings goal title using record.goalID
+                            let goalName = goals.first(where: { $0.id == record.goalID })?.title ?? "Unknown Savings Goal"
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Goal ID: \(record.goalID.uuidString.prefix(8))")
+                                Text("Savings Goal: \(goalName)")
+//                                    .font(.headline)
                                 Text("Amount: \(formatAmount(record.amount))")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                                 Text(record.date, style: .date)
                                     .font(.footnote)
                                     .foregroundColor(.secondary)
-                                Text(record.description)
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
                             }
                             .padding(.vertical, 4)
                         }
+                        .onDelete(perform: deleteSavingsRecord)
                     }
                 }
             }

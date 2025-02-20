@@ -31,6 +31,19 @@ extension Color {
     }
 }
 
+extension Color {
+    static func cardBackground(for scheme: ColorScheme) -> Color {
+        // In light mode, the card is “primary” (systemBackground) and in dark mode, it’s “secondary” (a darker gray)
+        return scheme == .light ? Color(UIColor.systemBackground) : Color(UIColor.secondarySystemBackground)
+    }
+    
+    static func viewBackground(for scheme: ColorScheme) -> Color {
+        // In light mode, the overall background is “secondary” (light gray) and in dark mode, it’s “primary” (black)
+        return scheme == .light ? Color(UIColor.secondarySystemBackground) : Color(UIColor.systemBackground)
+    }
+}
+
+
 
 // MARK: - Data Models
 
@@ -48,6 +61,11 @@ struct CategoryBudget: Identifiable, Codable {
     var total: Double
     private var colorHex: String // Store color as a hex string
     
+//    var color: Color {
+//        get { Color.blue }
+//        set { }  // ignore attempts to change the color
+//    }
+
     var color: Color {
         get { Color(hex: colorHex) ?? .gray }
         set { colorHex = newValue.toHex() }
@@ -226,28 +244,44 @@ extension Double {
 struct CategoryRow: View {
     let category: CategoryBudget
     let spentThisMonth: Double
-    let allocatedAmount: Double // Added this line
-    
+    let allocatedAmount: Double
+
     private var fractionUsed: Double {
         guard allocatedAmount > 0 else { return 0 }
         let rawFrac = spentThisMonth / allocatedAmount
         return min(max(rawFrac, 0), 1)
     }
+    
     private var fractionRemaining: Double {
         1 - fractionUsed
     }
+    
     private var remainingDisplay: Double {
         allocatedAmount - spentThisMonth
+    }
+    
+    // NEW: Compute fill color based on percentage remaining
+    private var fillColor: Color {
+        let remaining = fractionRemaining
+        if remaining >= 0.5 {
+            return .green
+        } else if remaining >= 0.2 {
+            return .yellow
+        } else {
+            return .red
+        }
     }
     
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
+                // Background bar
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.gray.opacity(0.2))
                 
+                // Fill bar using the computed fillColor
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(category.color)
+                    .fill(fillColor)
                     .frame(width: geo.size.width * fractionRemaining)
                 
                 HStack {
@@ -266,6 +300,7 @@ struct CategoryRow: View {
         .frame(height: 30)
     }
 }
+
 
 
 /// An overall bar for all categories combined in a month.
@@ -333,7 +368,7 @@ struct GoalCardView: View {
         .padding()
         .background(Color(.systemBackground))
         .cornerRadius(10)
-        .shadow(radius: 4)
+        // .shadow(radius: 4)
         .padding(.horizontal)
     }
 }
@@ -484,6 +519,7 @@ struct AllTransactionsView: View {
 }
 
 struct TransactionLogView: View {
+    @Environment(\.dismiss) var dismiss
     let category: CategoryBudget
     let transactions: [Transaction]
     let selectedMonth: Date
@@ -508,6 +544,15 @@ struct TransactionLogView: View {
             .padding(.vertical, 4)
         }
         .navigationTitle(category.name)
+        .gesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { value in
+                        // If the drag is mostly rightward (i.e. user swiped from left edge)
+                        if value.translation.width > 50 {
+                            dismiss()
+                        }
+                    }
+            )
     }
 }
 
@@ -579,89 +624,143 @@ struct EditTransactionView: View {
 }
 
 // MARK: - Settings
-
 struct SettingsView: View {
-    @Binding var categories: [CategoryBudget]
+    // Bind the entire monthlyBudgets dictionary, the global categories,
+    // and also the transactions and allocations for the selected month.
+    @Binding var monthlyBudgets: [String: [CategoryBudget]]
+    @Binding var globalCategories: [CategoryBudget]
+    @Binding var transactions: [Transaction]
+    @Binding var allocations: [CategoryAllocation]
+    
+    // The month for which we are editing the budget.
+    let selectedMonth: Date
+    
+    // Local state copy for editing the monthly budget.
+    @State private var editedBudget: [CategoryBudget] = []
+    @State private var errorMessage: String = ""
     @Environment(\.dismiss) private var dismiss
     
-    @State private var newCategoryName: String = ""
-    @State private var newCategoryTotal: String = ""
-    @State private var errorMessage: String = ""
-    
-    private let availableColors: [Color] = [
-        .red, .green, .blue, .orange, .purple, .brown, .pink, .yellow, .mint, .indigo, .cyan
-    ]
+    // Computed property: true if there is any transaction or allocation in this month.
+    private var hasBudgetData: Bool {
+        let tx = transactionsForMonth(transactions, selectedMonth: selectedMonth)
+        let alloc = allocations.filter { sameMonth($0.month, selectedMonth) }
+        return !tx.isEmpty || !alloc.isEmpty
+    }
     
     var body: some View {
         NavigationStack {
             Form {
-                Section("Edit Existing Categories") {
-                    ForEach($categories) { $category in
+                Section(header: Text("Edit Budget Categories for \(monthYearFormatter.string(from: selectedMonth))")) {
+                    ForEach(editedBudget.indices, id: \.self) { index in
                         VStack(alignment: .leading) {
-                            TextField("Category Name", text: $category.name)
-                            TextField("Category Total", value: $category.total, format: .number)
-                                .keyboardType(.decimalPad)
+                            TextField("Category Name", text: $editedBudget[index].name)
+                            HStack {
+                                Text("Allocation:")
+                                TextField("Amount", value: $editedBudget[index].total, format: .number)
+                                    .keyboardType(.decimalPad)
+                            }
                         }
                     }
                     .onDelete(perform: deleteCategory)
                 }
                 
-                Section("Add New Category") {
-                    TextField("Name", text: $newCategoryName)
-                    TextField("Total", text: $newCategoryTotal).keyboardType(.decimalPad)
-                    
+                Section {
                     Button("Add Category") {
                         addCategory()
                     }
-                    if !errorMessage.isEmpty {
+                }
+                
+                // NEW: Section for deleting the entire monthly budget.
+                if !hasBudgetData {
+                    Section {
+                        Button(role: .destructive) {
+                            // Delete this month’s budget by removing the key from the dictionary
+                            let key = monthKey(for: selectedMonth)
+                            monthlyBudgets.removeValue(forKey: key)
+                            dismiss()
+                        } label: {
+                            Text("Delete Budget")
+                        }
+                    }
+                } else {
+                    Section {
+                        Text("Budget cannot be deleted because there are transactions or allocations for this month.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if !errorMessage.isEmpty {
+                    Section {
                         Text(errorMessage)
                             .foregroundColor(.red)
-                            .font(.footnote)
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("Budget Settings")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Save") {
+                        saveChanges()
+                    }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                let key = monthKey(for: selectedMonth)
+                if let currentBudget = monthlyBudgets[key] {
+                    editedBudget = currentBudget
+                } else {
+                    editedBudget = globalCategories
                 }
             }
         }
     }
     
-    private func deleteCategory(at offsets: IndexSet) {
-        categories.remove(atOffsets: offsets)
-    }
-    
     private func addCategory() {
-        errorMessage = ""
-        guard !newCategoryName.isEmpty else {
-            errorMessage = "Please enter a category name."
-            return
-        }
-        guard let tot = Double(newCategoryTotal) else {
-            errorMessage = "Please enter a valid number for total."
-            return
-        }
-        
-        let color = nextAvailableColor()
-        let newCat = CategoryBudget(name: newCategoryName, total: tot, color: color)
-        categories.append(newCat)
-        
-        newCategoryName = ""
-        newCategoryTotal = ""
+        let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
+        editedBudget.append(newCategory)
     }
     
-    private func nextAvailableColor() -> Color {
-        let usedColors = Set(categories.map { $0.color.description })
-        for c in availableColors {
-            if !usedColors.contains(c.description) {
-                return c
+    private func deleteCategory(at offsets: IndexSet) {
+        // Before deleting, check if any category being removed has data.
+        for index in offsets {
+            let cat = editedBudget[index]
+            if hasDataForCategory(categoryID: cat.id) {
+                errorMessage = "Cannot remove category \"\(cat.name)\" because it has transactions or allocations for this month."
+                return
             }
         }
-        return .gray
+        editedBudget.remove(atOffsets: offsets)
+    }
+    
+    private func saveChanges() {
+        let key = monthKey(for: selectedMonth)
+        // Compare original budget (if any) with the edited one.
+        let originalBudget = monthlyBudgets[key] ?? []
+        let originalIDs = Set(originalBudget.map { $0.id })
+        let editedIDs = Set(editedBudget.map { $0.id })
+        let removedIDs = originalIDs.subtracting(editedIDs)
+        // If any removed category has data, do not allow saving.
+        for removedID in removedIDs {
+            if hasDataForCategory(categoryID: removedID) {
+                errorMessage = "Cannot remove a category that has transactions or allocations for this month."
+                return
+            }
+        }
+        monthlyBudgets[key] = editedBudget
+        dismiss()
+    }
+    
+    private func hasDataForCategory(categoryID: UUID) -> Bool {
+        let txForCat = transactionsForMonth(transactions, selectedMonth: selectedMonth).filter { $0.categoryID == categoryID }
+        let allocForCat = allocations.filter { sameMonth($0.month, selectedMonth) && $0.categoryID == categoryID }
+        return !txForCat.isEmpty || !allocForCat.isEmpty
     }
 }
+
 
 // MARK: - Record Transaction
 struct RecordTransactionView: View {
@@ -829,8 +928,8 @@ struct MonthPickerView: View {
 
 struct MonthSelectorCard: View {
     @Binding var selectedMonth: Date
-    
-    // Define the minimum allowable date (January 2025)
+    @Environment(\.colorScheme) var colorScheme  // Moved here
+
     var minDate: Date {
         Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 1))!
     }
@@ -866,14 +965,15 @@ struct MonthSelectorCard: View {
             }
             .padding()
         }
-        .background(Color(.systemBackground))
+        .background(Color.cardBackground(for: colorScheme))
         .cornerRadius(10)
-        .shadow(radius: 4)
         .padding(.horizontal)
     }
 }
 
+
 struct RolloverBalanceCard: View {
+    @Environment(\.colorScheme) var colorScheme
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
     @Binding var rolloverLeftover: Double
     @Binding var categories: [CategoryBudget]
@@ -924,9 +1024,12 @@ struct RolloverBalanceCard: View {
             }
             .padding()
         }
-        .background(Color(.systemBackground))
+//        .background(Color(.systemBackground))
+//        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.cardBackground(for: colorScheme))
+
         .cornerRadius(10)
-        .shadow(radius: 4)
+        // .shadow(radius: 4)
         .padding(.horizontal)
     }
 }
@@ -988,15 +1091,21 @@ struct RolloverBalanceCard: View {
 //        .padding(.vertical)
 //        .background(Color(.systemBackground))
 //        .cornerRadius(10)
-//        .shadow(radius: 4)
+//        // .shadow(radius: 4)
 //        .padding(.horizontal)
 //    }
 //}
 struct CategoriesCard: View {
+    @Environment(\.colorScheme) var colorScheme
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
     @Binding var transactions: [Transaction]
     @Binding var allocations: [CategoryAllocation] // <-- Add this line so we can see allocations
+    @Binding var categories: [CategoryBudget]
+    @State private var showNewBudgetSheet = false
+
     let selectedMonth: Date
+    
+    
     
     var body: some View {
         // We must compute these in `body`, rather than in property initializers
@@ -1067,9 +1176,12 @@ struct CategoriesCard: View {
                 }
             }
             .padding(.vertical)
-            .background(Color(.systemBackground))
+//            .background(Color(.systemBackground))
+//            .background(Color(UIColor.secondarySystemBackground))
+            .background(Color.cardBackground(for: colorScheme))
+
             .cornerRadius(10)
-            .shadow(radius: 4)
+            // .shadow(radius: 4)
             .padding(.horizontal)
             
         } else {
@@ -1080,7 +1192,7 @@ struct CategoriesCard: View {
                     .foregroundColor(.secondary)
                 
                 HStack(spacing: 50) {
-                    // 1) Copy previous month’s categories
+                    // Copy Previous Button remains unchanged.
                     Button {
                         copyPreviousMonth()
                     } label: {
@@ -1092,9 +1204,9 @@ struct CategoriesCard: View {
                         }
                     }
                     
-                    // 2) Create a new budget for this month
+                    // New Budget Button now presents the sheet.
                     Button {
-                        createNewBudget()
+                        showNewBudgetSheet = true
                     } label: {
                         VStack {
                             Image(systemName: "plus.circle")
@@ -1103,14 +1215,21 @@ struct CategoriesCard: View {
                                 .font(.subheadline)
                         }
                     }
+                    .sheet(isPresented: $showNewBudgetSheet) {
+                        NewBudgetView(monthlyBudgets: $monthlyBudgets, globalCategories: $categories, selectedMonth: selectedMonth)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
             .padding()
-            .background(Color(.systemBackground))
+//            .background(Color(.systemBackground))
+//            .background(Color(UIColor.secondarySystemBackground))
+            .background(Color.cardBackground(for: colorScheme))
+
             .cornerRadius(10)
-            .shadow(radius: 4)
+            // .shadow(radius: 4)
             .padding(.horizontal)
+
         }
     }
     
@@ -1157,6 +1276,7 @@ struct CategoriesCard: View {
 }
 
 struct CalendarCard: View {
+    @Environment(\.colorScheme) var colorScheme
     let transactions: [Transaction]
     let selectedMonth: Date
     let categories: [CategoryBudget] // New parameter added
@@ -1171,9 +1291,12 @@ struct CalendarCard: View {
             .padding(.top, 16)
             .padding(.bottom, 16)
         }
-        .background(Color(.systemBackground))
+//        .background(Color(.systemBackground))
+//        .background(Color(UIColor.secondarySystemBackground))
+        .background(Color.cardBackground(for: colorScheme))
+
         .cornerRadius(10)
-        .shadow(radius: 4)
+        // .shadow(radius: 4)
         .padding(.horizontal)
     }
 }
@@ -1194,14 +1317,14 @@ struct RecordTransactionButton: View {
                 .cornerRadius(10)
         }
         .padding(.horizontal, 16)
-        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2) // Added shadow for consistency
+        // .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2) // Added shadow for consistency
     }
 }
 
 // MARK: - ContentView
 
 struct ContentView: View {
-    
+    @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
     
     @State private var rolloverSpentByMonth: [String: Double] = [:]
@@ -1213,6 +1336,12 @@ struct ContentView: View {
         CategoryBudget(name: "Healthcare", total: 200, color: .red),
         CategoryBudget(name: "Entertainment", total: 700, color: .purple),
         CategoryBudget(name: "Misc", total: 500, color: .brown)
+//        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
+//        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
+//        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
+//        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
+//        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
+//        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
     ]
     
     @State private var allocations: [CategoryAllocation] = []
@@ -1285,7 +1414,8 @@ struct ContentView: View {
                         CategoriesCard(
                             monthlyBudgets: $monthlyBudgets,
                             transactions: $transactions,
-                            allocations: $allocations, // Add this argument
+                            allocations: $allocations,
+                            categories: $categories,
                             selectedMonth: selectedMonth
                         )
 
@@ -1299,13 +1429,13 @@ struct ContentView: View {
 
 //                    .padding(.top, 8) // Reduced top padding from default to 8 points
                 }
-
                 // just removed this REESE
 //                VStack {
 //                    Spacer()
 //                    RecordTransactionButton(showRecordTransaction: $showRecordTransaction)
 //                }
             }
+            .background(Color.viewBackground(for: colorScheme))
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 40) { // Adjust spacing as needed for even distribution
@@ -1341,11 +1471,18 @@ struct ContentView: View {
 
 
                         // In ContentView toolbar (where you have NavigationLink to SettingsView):
-                        NavigationLink(destination: SettingsView(categories: $categories)) {
+                        NavigationLink(destination: SettingsView(
+                            monthlyBudgets: $monthlyBudgets,
+                            globalCategories: $categories,
+                            transactions: $transactions,
+                            allocations: $allocations,
+                            selectedMonth: selectedMonth
+                        )) {
                             Image(systemName: "gearshape.fill")
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
+
 
                     }
                     .frame(maxWidth: .infinity) // Ensures the HStack takes full width for even spacing
@@ -1419,12 +1556,19 @@ struct ContentView: View {
                 } else {
                     // Fallback default if December 2024 budget is missing
                     monthlyBudgets[jan2025Key] = [
+                        
                         CategoryBudget(name: "Housing", total: 2400, color: .yellow),
                         CategoryBudget(name: "Transportation", total: 700, color: .green),
                         CategoryBudget(name: "Groceries", total: 900, color: .orange),
                         CategoryBudget(name: "Healthcare", total: 200, color: .red),
                         CategoryBudget(name: "Entertainment", total: 700, color: .purple),
                         CategoryBudget(name: "Misc", total: 500, color: .brown)
+//                        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
+//                        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
+//                        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
+//                        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
+//                        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
+//                        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
                     ]
                 }
             }
@@ -1475,7 +1619,8 @@ struct ContentView: View {
                     monthlyBudgets: monthlyBudgets,
                     allocations: allocations,
                     rolloverSpentByMonth: rolloverSpentByMonth,
-                    selectedMonth: loopMonth,
+//                    selectedMonth: loopMonth,
+                    selectedMonth: prev,
                     monthTransactions: monthTx
                 )
                 rolloverLeftover += leftoverValue
@@ -1640,6 +1785,163 @@ struct AddGoalView: View {
         
         goals.append(newGoal)
         dismiss()
+    }
+}
+
+// MARK: - New Budget View
+
+//struct NewBudgetView: View {
+//    @Binding var monthlyBudgets: [String: [CategoryBudget]]
+//    @Binding var globalCategories: [CategoryBudget]
+//    let selectedMonth: Date
+//    @Environment(\.dismiss) private var dismiss
+//
+//    // Local editable copy of the categories for this new budget
+//    @State private var customBudgets: [CategoryBudget] = []
+//    
+//    // A computed property to sum the allocations
+//    var totalAllocation: Double {
+//        customBudgets.reduce(0) { $0 + $1.total }
+//    }
+//    
+//    var body: some View {
+//        NavigationStack {
+//            List {
+//                Section(header:
+//                    Text("Budget for \(monthYearFormatter.string(from: selectedMonth))")
+//                        .font(.headline)
+//                ) {
+//                    ForEach(customBudgets.indices, id: \.self) { index in
+//                        VStack(alignment: .leading, spacing: 8) {
+//                            TextField("Category Name", text: $customBudgets[index].name)
+//                                .textFieldStyle(RoundedBorderTextFieldStyle())
+//                            HStack {
+//                                Text("Allocation:")
+//                                Spacer()
+//                                TextField("Amount", value: $customBudgets[index].total, format: .number)
+//                                    .keyboardType(.decimalPad)
+//                                    .multilineTextAlignment(.trailing)
+//                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+//                            }
+//                        }
+//                        .padding(.vertical, 4)
+//                    }
+//                    .onDelete(perform: deleteCategory)
+//                }
+//                
+//                Section(header:
+//                    Text("Total Allocation: \(formatAmount(totalAllocation))")
+//                        .font(.subheadline)
+//                        .foregroundColor(.secondary)
+//                ) {
+//                    EmptyView()
+//                }
+//            }
+//            .listStyle(InsetGroupedListStyle())
+//            .navigationTitle("New Budget")
+//            .toolbar {
+//                ToolbarItem(placement: .navigationBarLeading) {
+//                    Button("Cancel") { dismiss() }
+//                }
+//                ToolbarItem(placement: .navigationBarTrailing) {
+//                    Button("Save") {
+//                        monthlyBudgets[monthKey(for: selectedMonth)] = customBudgets
+//                        dismiss()
+//                    }
+//                    .disabled(customBudgets.isEmpty)
+//                }
+//                ToolbarItem(placement: .bottomBar) {
+//                    Button(action: addCategory) {
+//                        Label("Add Category", systemImage: "plus")
+//                    }
+//                    .buttonStyle(BorderedProminentButtonStyle())
+//                }
+//            }
+//            .onAppear {
+//                // Initialize with a copy of the global categories
+//                customBudgets = globalCategories.map { cat in
+//                    CategoryBudget(id: cat.id, name: cat.name, total: cat.total, color: cat.color)
+//                }
+//            }
+//        }
+//    }
+//    
+//    private func addCategory() {
+//        let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
+//        customBudgets.append(newCategory)
+//    }
+//    
+//    private func deleteCategory(at offsets: IndexSet) {
+//        customBudgets.remove(atOffsets: offsets)
+//    }
+//}
+
+
+
+struct NewBudgetView: View {
+    @Binding var monthlyBudgets: [String: [CategoryBudget]]
+    @Binding var globalCategories: [CategoryBudget]
+    let selectedMonth: Date
+    @Environment(\.dismiss) private var dismiss
+
+    // Use a local state copy so the user can edit without immediately affecting stored data.
+    @State private var customBudgets: [CategoryBudget] = []
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Edit Budget Categories")) {
+                    ForEach(customBudgets.indices, id: \.self) { index in
+                        VStack(alignment: .leading) {
+                            TextField("Category Name", text: $customBudgets[index].name)
+                            HStack {
+                                Text("Allocation:")
+                                TextField("Amount", value: $customBudgets[index].total, format: .number)
+                                    .keyboardType(.decimalPad)
+                            }
+                        }
+                    }
+                    .onDelete(perform: deleteCategory)
+                }
+                
+                Section {
+                    Button("Add Category") {
+                        addCategory()
+                    }
+                }
+            }
+            .navigationTitle("New Budget for \(monthYearFormatter.string(from: selectedMonth))")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        monthlyBudgets[monthKey(for: selectedMonth)] = customBudgets
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                // Initialize with a copy of the global categories.
+                customBudgets = globalCategories.map { cat in
+                    // Make a copy so that changes here don't affect globalCategories.
+                    CategoryBudget(id: cat.id, name: cat.name, total: cat.total, color: cat.color)
+                }
+            }
+        }
+    }
+    
+    private func addCategory() {
+        // Append a new category with default name and zero allocation.
+        let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
+        customBudgets.append(newCategory)
+    }
+    
+    private func deleteCategory(at offsets: IndexSet) {
+        customBudgets.remove(atOffsets: offsets)
     }
 }
 

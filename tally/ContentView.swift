@@ -219,14 +219,23 @@ fileprivate let monthYearFormatter: DateFormatter = {
 /// - No decimal places if less than $1,000.
 /// - One decimal place followed by 'K' if $1,000 or more.
 func formatAmount(_ amount: Double) -> String {
-    if amount >= 1000 {
-        let formatted = (amount / 1000).rounded(toPlaces: 1)
-        return "$\(formatted)k"
+    let sign = amount < 0 ? "-" : ""
+    let absAmount = abs(amount)
+    if absAmount >= 1000 {
+        let formatted = (absAmount / 1000).rounded(toPlaces: 1)
+        return "$\(sign)\(formatted)k"
     } else {
-        let formatted = Int(amount.rounded()) // Changed from Int(amount) to Int(amount.rounded())
-        return "$\(formatted)"
+        let formatted = Int(absAmount.rounded())
+        return "$\(sign)\(formatted)"
     }
 }
+
+func formatPreciseAmount(_ amount: Double) -> String {
+    let sign = amount < 0 ? "-" : ""
+    let absAmount = abs(amount)
+    return "$\(sign)\(String(format: "%.2f", absAmount))"
+}
+
 
 // Extension to round a Double to a specified number of decimal places.
 extension Double {
@@ -237,6 +246,11 @@ extension Double {
     }
 }
 
+func formatDate(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    return formatter.string(from: date)
+}
 
 // MARK: - Row Views
 
@@ -248,66 +262,61 @@ struct CategoryRow: View {
 
     private var fractionUsed: Double {
         guard allocatedAmount > 0 else { return 0 }
-        let rawFrac = spentThisMonth / allocatedAmount
-        return min(max(rawFrac, 0), 1)
+        return min(max(spentThisMonth / allocatedAmount, 0), 1)
     }
-    
     private var fractionRemaining: Double {
         1 - fractionUsed
     }
-    
     private var remainingDisplay: Double {
         allocatedAmount - spentThisMonth
     }
-    
-    // NEW: Compute fill color based on percentage remaining
+
+    // Fill color based on how much is left
     private var fillColor: Color {
-        let remaining = fractionRemaining
-        if remaining >= 0.5 {
-            return .green
-        } else if remaining >= 0.2 {
-            return .yellow
-        } else {
-            return .red
+        switch fractionRemaining {
+        case 0.5...:       return .green
+        case 0.2..<0.5:    return .yellow
+        default:           return .red
         }
     }
-    
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                // Background bar
+                // Gray background
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.gray.opacity(0.2))
-                
-                // Fill bar using the computed fillColor
-                RoundedRectangle(cornerRadius: 10)
+
+                // The fill bar (just a plain Rectangle)
+                Rectangle()
                     .fill(fillColor)
                     .frame(width: geo.size.width * fractionRemaining)
-                
+
+                // Text on top
                 HStack {
+                    let textColor: Color = (remainingDisplay < 0) ? .red : .white
                     Text(category.name)
-                        .foregroundColor(.white)
+                        .foregroundColor(textColor)
                         .padding(.leading, 8)
-                    
                     Spacer()
-                    
                     Text("\(formatAmount(remainingDisplay)) / \(formatAmount(allocatedAmount))")
-                        .foregroundColor(.white)
+                        .foregroundColor(textColor)
                         .padding(.trailing, 8)
                 }
             }
+            // <— Clip the entire ZStack to a rounded rectangle
+            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .frame(height: 30)
     }
 }
 
 
-
 /// An overall bar for all categories combined in a month.
 struct OverallBudgetRow: View {
-    let totalAllocated: Double // Changed from categories and spent mapping
+    let totalAllocated: Double
     let totalSpent: Double
-    
+
     private var fractionRemaining: Double {
         guard totalAllocated > 0 else { return 1 }
         let usedFrac = totalSpent / totalAllocated
@@ -316,29 +325,32 @@ struct OverallBudgetRow: View {
     private var remaining: Double {
         totalAllocated - totalSpent
     }
-    
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
+                // Gray background
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.gray.opacity(0.2))
-                
-                RoundedRectangle(cornerRadius: 10)
+
+                // The fill bar
+                Rectangle()
                     .fill(Color.teal)
                     .frame(width: geo.size.width * fractionRemaining)
-                
+
+                // Text on top
                 HStack {
+                    let textColor: Color = (remaining < 0) ? .red : .white
                     Text("Overall Budget")
-                        .foregroundColor(.white)
+                        .foregroundColor(textColor)
                         .padding(.leading, 8)
-                    
                     Spacer()
-                    
                     Text("\(formatAmount(remaining)) / \(formatAmount(totalAllocated))")
-                        .foregroundColor(.white)
+                        .foregroundColor(textColor)
                         .padding(.trailing, 8)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .frame(height: 30)
     }
@@ -347,6 +359,7 @@ struct OverallBudgetRow: View {
 // MARK: - Goal Card View
 
 struct GoalCardView: View {
+    @Environment(\.colorScheme) var colorScheme
     @Binding var goal: SavingsGoal
     var onDelete: () -> Void
 
@@ -359,17 +372,68 @@ struct GoalCardView: View {
                 Text("\(formatAmount(goal.currentAmount)) / \(formatAmount(goal.targetAmount))")
                     .font(.subheadline)
             }
-
+            
             ProgressView(value: goal.currentAmount, total: goal.targetAmount)
                 .progressViewStyle(LinearProgressViewStyle())
-                .accentColor(.blue) // Optional: Customize the progress bar color
-
+                .accentColor(.blue)
         }
         .padding()
-        .background(Color(.systemBackground))
+        // Use the cardBackground for consistency with your other card views.
+        .background(Color.cardBackground(for: colorScheme))
         .cornerRadius(10)
-        // .shadow(radius: 4)
         .padding(.horizontal)
+    }
+}
+
+// MARK: - Goals View
+
+struct GoalsView: View {
+    @Environment(\.colorScheme) var colorScheme
+    @Binding var goals: [SavingsGoal]
+    @State private var showAddGoalMenu = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                // Set the overall view background using the viewBackground helper.
+                Color.viewBackground(for: colorScheme)
+                    .ignoresSafeArea()
+                
+                VStack {
+                    if goals.isEmpty {
+                        ContentUnavailableView("No Goals", systemImage: "plus.circle")
+                            .padding()
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
+                                ForEach($goals) { $goal in
+                                    GoalCardView(goal: $goal, onDelete: {
+                                        if let index = goals.firstIndex(where: { $0.id == goal.id }) {
+                                            goals.remove(at: index)
+                                        }
+                                    })
+                                }
+                            }
+                            .padding(.top, 16)
+                            .padding(.bottom, 16)
+                        }
+                    }
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showAddGoalMenu = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .sheet(isPresented: $showAddGoalMenu) {
+                AddGoalView(goals: $goals)
+            }
+            .navigationTitle("Savings Goals")
+        }
     }
 }
 
@@ -470,53 +534,41 @@ struct MonthlyCalendarView: View {
 }
 
 // MARK: - Detail Screens
-
 struct AllTransactionsView: View {
     @Binding var transactions: [Transaction]
     @Binding var categories: [CategoryBudget]
     let selectedMonth: Date
-    
+
     var monthlyTx: [Transaction] {
         transactionsForMonth(transactions, selectedMonth: selectedMonth)
+    }
+    
+    private func categoryName(for id: UUID) -> String {
+        categories.first(where: { $0.id == id })?.name ?? "Unknown Category"
     }
     
     var body: some View {
         List {
             ForEach(monthlyTx) { tx in
-                if let idx = transactions.firstIndex(where: { $0.id == tx.id }) {
-                    NavigationLink {
-                        EditTransactionView(
-                            transaction: $transactions[idx],
-                            categories: $categories
-                        )
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(tx.description)
-                            Text(formatAmount(tx.amount))
-                                .foregroundColor(.secondary)
-                                .font(.footnote)
-                            Text(tx.date, style: .date)
-                                .foregroundColor(.secondary)
-                                .font(.footnote)
-                        }
-                        .padding(.vertical, 4)
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(tx.description)
+                            .font(.headline)
+                        Text("\(categoryName(for: tx.categoryID)) • \(formatDate(tx.date))")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
+                    Spacer()
+                    Text(formatPreciseAmount(tx.amount))
+                        .foregroundColor(.red)
                 }
+                .padding(.vertical, 4)
             }
-            .onDelete(perform: deleteTransaction)
         }
         .navigationTitle("\(monthYearFormatter.string(from: selectedMonth))")
     }
-    
-    private func deleteTransaction(at offsets: IndexSet) {
-        let monthlyList = monthlyTx
-        offsets.map { monthlyList[$0] }.forEach { tx in
-            if let globalIdx = transactions.firstIndex(where: { $0.id == tx.id }) {
-                transactions.remove(at: globalIdx)
-            }
-        }
-    }
 }
+
 
 struct TransactionLogView: View {
     @Environment(\.dismiss) var dismiss
@@ -531,30 +583,33 @@ struct TransactionLogView: View {
     
     var body: some View {
         List(filteredTx) { t in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(t.description)
-                Text(formatAmount(t.amount))
-                    .foregroundColor(.secondary)
-                    .font(.footnote)
-
-                Text(t.date, style: .date)
-                    .foregroundColor(.secondary)
-                    .font(.footnote)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t.description)
+                        .font(.headline)
+                    // Display the transaction date
+                    Text(formatDate(t.date))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(formatPreciseAmount(t.amount))
+                    .foregroundColor(.red)
             }
             .padding(.vertical, 4)
         }
         .navigationTitle(category.name)
         .gesture(
-                DragGesture(minimumDistance: 20)
-                    .onEnded { value in
-                        // If the drag is mostly rightward (i.e. user swiped from left edge)
-                        if value.translation.width > 50 {
-                            dismiss()
-                        }
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.width > 50 {
+                        dismiss()
                     }
-            )
+                }
+        )
     }
 }
+
 
 struct EditTransactionView: View {
     @Binding var transaction: Transaction
@@ -1426,8 +1481,7 @@ struct ContentView: View {
                         )
 
                     }
-
-//                    .padding(.top, 8) // Reduced top padding from default to 8 points
+                    .padding(.top, 8) // Reduced top padding from default to 8 points
                 }
                 // just removed this REESE
 //                VStack {
@@ -1619,7 +1673,6 @@ struct ContentView: View {
                     monthlyBudgets: monthlyBudgets,
                     allocations: allocations,
                     rolloverSpentByMonth: rolloverSpentByMonth,
-//                    selectedMonth: loopMonth,
                     selectedMonth: prev,
                     monthTransactions: monthTx
                 )
@@ -1634,12 +1687,15 @@ struct ContentView: View {
             }
         }
         // Subtract extra allocations made in the current (selected) month
-            let currentExtra = allocations
-                .filter { sameMonth($0.month, selectedMonth) }
-                .reduce(0) { $0 + $1.allocatedAmount }
-            rolloverLeftover -= currentExtra
+        let currentExtra = allocations
+            .filter { sameMonth($0.month, selectedMonth) }
+            .reduce(0) { $0 + $1.allocatedAmount }
+        rolloverLeftover -= currentExtra
+        
+        // NEW: Also subtract any savings transfers made in the current month.
+        let currentSavings = rolloverSpentByMonth[monthKey(for: selectedMonth)] ?? 0
+        rolloverLeftover -= currentSavings
     }
-
 
 
 //    @AppStorage("savingsGoals") private var goalsData: Data = Data()
@@ -1679,54 +1735,6 @@ struct ContentView: View {
     }
 
 }
-
-// MARK: - Goals View
-
-struct GoalsView: View {
-    @Binding var goals: [SavingsGoal]
-    @State private var showAddGoalMenu = false
-
-    var body: some View {
-        NavigationStack {
-            VStack {
-                if goals.isEmpty {
-                    // Display a placeholder when there are no goals
-                    ContentUnavailableView("No Goals", systemImage: "plus.circle")
-                        .padding()
-                } else {
-                    // Use ScrollView with LazyVStack to display GoalCardViews
-                    ScrollView {
-                        LazyVStack(spacing: 16) {
-                            ForEach($goals) { $goal in
-                                GoalCardView(goal: $goal, onDelete: {
-                                    if let index = goals.firstIndex(where: { $0.id == goal.id }) {
-                                        goals.remove(at: index)
-                                    }
-                                })
-                            }
-                        }
-                        .padding(.top, 16)
-                        .padding(.bottom, 16)
-                    }
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddGoalMenu = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $showAddGoalMenu) {
-                AddGoalView(goals: $goals)
-            }
-            .navigationTitle("Savings Goals")
-        }
-    }
-}
-
 
 
 struct AddGoalView: View {
@@ -1971,15 +1979,15 @@ struct DailyTransactionsView: View {
                         VStack(alignment: .leading) {
                             Text(tx.description)
                                 .font(.headline)
-                            Text(tx.date, style: .time)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+//                            Text(tx.date, style: .time)
+//                                .font(.subheadline)
+//                                .foregroundColor(.secondary)
                             Text(categoryName(for: tx.categoryID))
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
                         Spacer()
-                        Text(formatAmount(tx.amount))
+                        Text(formatPreciseAmount(tx.amount))
                             .foregroundColor(.red)
                     }
                     .padding(.vertical, 4)
@@ -2009,11 +2017,9 @@ struct RolloverDetailView: View {
     @Binding var allocations: [CategoryAllocation]
     let overallBudget: Double
     let selectedMonth: Date
-    
     @Binding var rolloverSpentByMonth: [String: Double]
     @Binding var savingsRecords: [SavingsRecord]
     
-    // ADD THIS:
     let refreshRollover: () -> Void
     
     @State private var showTransfer = false
@@ -2022,11 +2028,11 @@ struct RolloverDetailView: View {
         NavigationStack {
             Form {
                 Section("Current Rollover Balance") {
-                    Text("$\(Int(rolloverLeftover))")
+                    // Use precise formatting here
+                    Text(formatPreciseAmount(rolloverLeftover))
                         .font(.title2)
                         .fontWeight(.bold)
                 }
-                
                 Section("How is this calculated?") {
                     Text("""
                     1. We look at the previous month's leftover = (last month's total budget) - (spent last month).
@@ -2035,7 +2041,6 @@ struct RolloverDetailView: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
                 }
-                
                 Section("Transfer Rollover") {
                     Button("Transfer to Category or Goal") {
                         showTransfer = true
@@ -2055,10 +2060,10 @@ struct RolloverDetailView: View {
                     refreshRollover: refreshRollover
                 )
             }
-
         }
     }
 }
+
 
 // MARK: - TransferFundsView
 
@@ -2088,7 +2093,7 @@ struct TransferFundsView: View {
         NavigationStack {
             Form {
                 Section("Transfer From") {
-                    Text("Rollover Balance: $\(Int(rolloverLeftover))")
+                    Text("Rollover Balance: \(formatPreciseAmount(rolloverLeftover))")
                 }
                 
                 Section("Transfer To") {
@@ -2199,7 +2204,6 @@ struct TransferFundsView: View {
     }
 }
 
-
 struct TransactionsAndAllocationsView: View {
     @Binding var transactions: [Transaction]
     @Binding var allocations: [CategoryAllocation]
@@ -2208,8 +2212,9 @@ struct TransactionsAndAllocationsView: View {
     @Binding var categories: [CategoryBudget]
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
     
-    
     @State private var selectedSegment = 0
+    // NEW: This holds the index in the original transactions array for the transaction being edited.
+    @State private var editingTransactionIndex: Int? = nil
     
     var sortedTransactions: [Transaction] {
         transactions.sorted { $0.date < $1.date }
@@ -2223,6 +2228,18 @@ struct TransactionsAndAllocationsView: View {
         savingsRecords.sorted { $0.date < $1.date }
     }
     
+    // Helper to get a category name from its id.
+    private func categoryName(for id: UUID) -> String {
+        categories.first(where: { $0.id == id })?.name ?? "Unknown Category"
+    }
+    
+    // Helper to format a Date as a medium‑style string.
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: date)
+    }
+    
     private func deleteTransaction(at offsets: IndexSet) {
         for index in offsets {
             let txToDelete = sortedTransactions[index]
@@ -2230,10 +2247,8 @@ struct TransactionsAndAllocationsView: View {
                 transactions.remove(at: originalIndex)
             }
         }
-        // Optionally, persist immediately:
-        // saveAllData()
     }
-
+    
     private func deleteAllocation(at offsets: IndexSet) {
         for index in offsets {
             let allocToDelete = sortedAllocations[index]
@@ -2241,30 +2256,22 @@ struct TransactionsAndAllocationsView: View {
                 allocations.remove(at: originalIndex)
             }
         }
-        // Optionally, persist immediately:
-        // saveAllData()
     }
-
+    
     private func deleteSavingsRecord(at offsets: IndexSet) {
         for index in offsets {
             let recordToDelete = sortedSavings[index]
             if let originalIndex = savingsRecords.firstIndex(where: { $0.id == recordToDelete.id }) {
                 savingsRecords.remove(at: originalIndex)
             }
-            // Update the corresponding savings goal
             if let goalIndex = goals.firstIndex(where: { $0.id == recordToDelete.goalID }) {
                 goals[goalIndex].currentAmount -= recordToDelete.amount
-                // Ensure the currentAmount does not go negative.
                 if goals[goalIndex].currentAmount < 0 {
                     goals[goalIndex].currentAmount = 0
                 }
             }
         }
-        // Optionally, persist immediately:
-        // saveAllData()
     }
-
-
     
     var body: some View {
         VStack {
@@ -2280,34 +2287,61 @@ struct TransactionsAndAllocationsView: View {
                 if selectedSegment == 0 {
                     Section(header: Text("Transactions").font(.headline)) {
                         ForEach(sortedTransactions) { tx in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(tx.description)
-                                Text("Amount: \(formatAmount(tx.amount))")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Text(tx.date, style: .date)
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(tx.description)
+                                        .font(.headline)
+                                    Text("\(formatDate(tx.date))")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text(formatPreciseAmount(tx.amount))
+                                    .foregroundColor(.red)
                             }
                             .padding(.vertical, 4)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    if let index = transactions.firstIndex(where: { $0.id == tx.id }) {
+                                        transactions.remove(at: index)
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                
+                                Button {
+                                    // Set editingTransactionIndex to the index of tx in the original transactions array.
+                                    if let index = transactions.firstIndex(where: { $0.id == tx.id }) {
+                                        editingTransactionIndex = index
+                                    }
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
                         }
-                        .onDelete(perform: deleteTransaction)
+                        // We no longer add .onDelete here because swipe actions handle deletion.
                     }
                 } else if selectedSegment == 1 {
                     Section(header: Text("Allocations").font(.headline)) {
                         ForEach(sortedAllocations) { alloc in
-                            // Get the month key for this allocation.
                             let allocKey = monthKey(for: alloc.month)
-                            // Try to find the category in the monthly budgets for that month.
-                            let categoryName = (monthlyBudgets[allocKey]?.first(where: { $0.id == alloc.categoryID })?.name)
+                            let catName = (monthlyBudgets[allocKey]?.first(where: { $0.id == alloc.categoryID })?.name)
                                 ?? (categories.first(where: { $0.id == alloc.categoryID })?.name)
                                 ?? "Unknown Category"
                             let monthString = monthYearFormatter.string(from: alloc.month)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(monthString) \(categoryName)")
-                                Text("Allocated: \(formatAmount(alloc.allocatedAmount))")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                            
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(monthString)")
+                                        .font(.headline)
+                                    Text("\(catName)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text(formatPreciseAmount(alloc.allocatedAmount))
+                                    .foregroundColor(.red)
                             }
                             .padding(.vertical, 4)
                         }
@@ -2316,17 +2350,19 @@ struct TransactionsAndAllocationsView: View {
                 } else if selectedSegment == 2 {
                     Section(header: Text("Savings").font(.headline)) {
                         ForEach(sortedSavings) { record in
-                            // Look up the savings goal title using record.goalID
                             let goalName = goals.first(where: { $0.id == record.goalID })?.title ?? "Unknown Savings Goal"
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Savings Goal: \(goalName)")
-//                                    .font(.headline)
-                                Text("Amount: \(formatAmount(record.amount))")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Text(record.date, style: .date)
-                                    .font(.footnote)
-                                    .foregroundColor(.secondary)
+                            
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Savings Goal: \(goalName)")
+                                        .font(.headline)
+                                    Text(formatDate(record.date))
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text(formatPreciseAmount(record.amount))
+                                    .foregroundColor(.red)
                             }
                             .padding(.vertical, 4)
                         }
@@ -2337,9 +2373,15 @@ struct TransactionsAndAllocationsView: View {
             .listStyle(InsetGroupedListStyle())
         }
         .navigationTitle("All Data")
+        // Present the EditTransactionView sheet when editingTransactionIndex is not nil.
+        .sheet(isPresented: Binding(get: { editingTransactionIndex != nil }, set: { if !$0 { editingTransactionIndex = nil } })) {
+            if let index = editingTransactionIndex {
+                // Pass a binding to the transaction in the original array.
+                EditTransactionView(transaction: $transactions[index], categories: $categories)
+            }
+        }
     }
 }
-
 
 
 // MARK: - Helpers

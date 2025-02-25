@@ -21,7 +21,7 @@
 ---
 
 ## Overview
-**Tally** is an iOS application built with Swift, designed to help users budget and track their financial transactions. The app allows users to create and maintain budgets, record transactions in specific categories, and monitor their spending against set limits each month. Users can also set and track savings goals, allocate rollover budget from previous months, and  integrate with external services to automate their transaction inputs.
+**Tally** is an iOS application built with Swift, designed to help users budget and track their financial transactions. The app allows users to create and maintain budgets, record transactions in specific categories, and monitor their spending against set limits each month. Users can also set and track savings goals, allocate rollover budget from previous months, and integrate with external services to automate their transaction inputs.
 
 ---
 

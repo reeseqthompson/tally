@@ -391,33 +391,57 @@ struct GoalsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var goals: [SavingsGoal]
     @State private var showAddGoalMenu = false
+    @State private var editingGoalIndex: Int? = nil
 
     var body: some View {
         NavigationStack {
             ZStack {
-                // Set the overall view background using the viewBackground helper.
                 Color.viewBackground(for: colorScheme)
                     .ignoresSafeArea()
                 
-                VStack {
-                    if goals.isEmpty {
-                        ContentUnavailableView("No Goals", systemImage: "plus.circle")
-                            .padding()
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 16) {
-                                ForEach($goals) { $goal in
-                                    GoalCardView(goal: $goal, onDelete: {
-                                        if let index = goals.firstIndex(where: { $0.id == goal.id }) {
+                if goals.isEmpty {
+                    Button(action: {
+                        showAddGoalMenu = true
+                    }) {
+                        VStack(spacing: 8) {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 50))
+                                .foregroundColor(.blue)
+                            Text("No Goals")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                        }
+                        .padding()
+                    }
+                } else {
+                    List {
+                        ForEach(Array(goals.enumerated()), id: \.element.id) { index, goal in
+                            GoalCardView(goal: $goals[index], onDelete: { })
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    // Swap the order: first Edit, then Delete
+                                    Button {
+                                        editingGoalIndex = index
+                                    } label: {
+                                        Label("Edit", systemImage: "pencil")
+                                    }
+                                    .tint(.blue)
+                                    
+                                    if goal.currentAmount == 0 {
+                                        Button(role: .destructive) {
                                             goals.remove(at: index)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
                                         }
-                                    })
+                                    }
                                 }
-                            }
-                            .padding(.top, 16)
-                            .padding(.bottom, 16)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
                     }
+                    // Remove the List's background so the cards fill the width
+                    .listStyle(PlainListStyle())
+                    .scrollContentBackground(.hidden)
                 }
             }
             .toolbar {
@@ -432,11 +456,74 @@ struct GoalsView: View {
             .sheet(isPresented: $showAddGoalMenu) {
                 AddGoalView(goals: $goals)
             }
+            .sheet(isPresented: Binding(
+                get: { editingGoalIndex != nil },
+                set: { if !$0 { editingGoalIndex = nil } }
+            )) {
+                if let index = editingGoalIndex {
+                    EditGoalView(goal: $goals[index])
+                }
+            }
             .navigationTitle("Savings Goals")
         }
     }
 }
 
+
+// MARK: - Edit Goal View
+
+/// Presents a sheet allowing the user to edit a savings goal’s title and target amount.
+struct EditGoalView: View {
+    @Binding var goal: SavingsGoal
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String = ""
+    @State private var targetAmountString: String = ""
+    @State private var errorMessage: String = ""
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Goal Details") {
+                    TextField("Goal Title", text: $title)
+                    TextField("Target Amount", text: $targetAmountString)
+                        .keyboardType(.decimalPad)
+                }
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                }
+            }
+            .navigationTitle("Edit Goal")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                title = goal.title
+                targetAmountString = String(goal.targetAmount)
+            }
+        }
+    }
+    
+    private func save() {
+        guard let newTarget = Double(targetAmountString), newTarget > 0 else {
+            errorMessage = "Please enter a valid target amount."
+            return
+        }
+        // Ensure new target is not less than the current amount allocated
+        if newTarget < goal.currentAmount {
+            errorMessage = "Target amount cannot be lower than the current saved amount (\(formatAmount(goal.currentAmount)))."
+            return
+        }
+        goal.title = title
+        goal.targetAmount = newTarget
+        dismiss()
+    }
+}
 
 
 // MARK: - Calendar
@@ -613,23 +700,28 @@ struct TransactionLogView: View {
 
 struct EditTransactionView: View {
     @Binding var transaction: Transaction
-    @Binding var categories: [CategoryBudget]
-    
-    @Environment(\.dismiss) private var dismiss
+    let monthBudgets: [String: [CategoryBudget]]
+    let globalCategories: [CategoryBudget]
     
     @State private var selectedCategoryIndex: Int = 0
     @State private var amountString: String = ""
     @State private var titleString: String = ""
-    @State private var date = Date()
-    @State private var errorMessage = ""
+    @State private var date: Date = Date()
+    @State private var errorMessage: String = ""
+    
+    // Compute the list of categories based on the (possibly updated) date.
+    var currentMonthCategories: [CategoryBudget] {
+        let key = monthKey(for: date)
+        return monthBudgets[key] ?? globalCategories
+    }
     
     var body: some View {
         NavigationStack {
             Form {
                 Section("Category") {
                     Picker("Choose Category", selection: $selectedCategoryIndex) {
-                        ForEach(categories.indices, id: \.self) { idx in
-                            Text(categories[idx].name).tag(idx)
+                        ForEach(currentMonthCategories.indices, id: \.self) { idx in
+                            Text(currentMonthCategories[idx].name).tag(idx)
                         }
                     }
                 }
@@ -638,7 +730,18 @@ struct EditTransactionView: View {
                     TextField("Transaction Title", text: $titleString)
                     TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
+                    // Use a standard DatePicker (the range is not restricted here because the user may edit the date)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
+                        .onChange(of: date) { newDate in
+                            // When the date changes, update the picker’s list.
+                            // If the current transaction.categoryID is not in the new list, default to the first category.
+                            let cats = currentMonthCategories
+                            if !cats.contains(where: { $0.id == transaction.categoryID }) {
+                                selectedCategoryIndex = 0
+                            } else if let idx = cats.firstIndex(where: { $0.id == transaction.categoryID }) {
+                                selectedCategoryIndex = idx
+                            }
+                        }
                 }
                 
                 if !errorMessage.isEmpty {
@@ -660,10 +763,18 @@ struct EditTransactionView: View {
                 amountString = String(transaction.amount)
                 titleString = transaction.description
                 date = transaction.date
-                selectedCategoryIndex = categories.firstIndex(where: { $0.id == transaction.categoryID }) ?? 0
+                // Set the initial selected index based on the transaction's category and its month.
+                let cats = currentMonthCategories
+                if let idx = cats.firstIndex(where: { $0.id == transaction.categoryID }) {
+                    selectedCategoryIndex = idx
+                } else {
+                    selectedCategoryIndex = 0
+                }
             }
         }
     }
+    
+    @Environment(\.dismiss) private var dismiss
     
     private func saveChanges() {
         guard let newAmt = Double(amountString), newAmt >= 0 else {
@@ -673,10 +784,14 @@ struct EditTransactionView: View {
         transaction.amount = newAmt
         transaction.description = titleString
         transaction.date = date
-        transaction.categoryID = categories[selectedCategoryIndex].id
+        let cats = currentMonthCategories
+        if cats.indices.contains(selectedCategoryIndex) {
+            transaction.categoryID = cats[selectedCategoryIndex].id
+        }
         dismiss()
     }
 }
+
 
 // MARK: - Settings
 struct SettingsView: View {
@@ -819,8 +934,8 @@ struct SettingsView: View {
 
 // MARK: - Record Transaction
 struct RecordTransactionView: View {
-    let monthCategories: [CategoryBudget]    // <-- The categories for this month
-    @Binding var transactions: [Transaction] // Still binding, so you can append
+    let monthCategories: [CategoryBudget]    // The categories for this month
+    @Binding var transactions: [Transaction] // Binding so you can append transactions
     let selectedMonth: Date
     let refreshRollover: () -> Void
 
@@ -831,6 +946,18 @@ struct RecordTransactionView: View {
     @State private var titleString: String = ""
     @State private var date = Date()
     @State private var errorMessage = ""
+    
+    // NEW: Computed property that returns the date range for the selected month.
+    var selectedMonthRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        // Get the first day of the selected month.
+        let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedMonth))!
+        // Get the range of days in the month.
+        let range = calendar.range(of: .day, in: .month, for: selectedMonth)!
+        // The last day is start plus (count - 1) days.
+        let endOfMonth = calendar.date(byAdding: .day, value: range.count - 1, to: startOfMonth)!
+        return startOfMonth...endOfMonth
+    }
     
     var body: some View {
         NavigationStack {
@@ -851,7 +978,9 @@ struct RecordTransactionView: View {
                     TextField("Transaction Title", text: $titleString)
                     TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                    // Use the computed date range to restrict selection.
+                    DatePicker("Date", selection: $date, in: selectedMonthRange, displayedComponents: .date)
+
                 }
 
                 if !errorMessage.isEmpty {
@@ -867,6 +996,18 @@ struct RecordTransactionView: View {
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                // If the selected month is the current month, default to today.
+                // Otherwise, default to the first day of the selected month.
+                if sameMonth(selectedMonth, Date()) {
+                    date = Date()
+                } else {
+                    let calendar = Calendar.current
+                    if let firstDay = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedMonth)) {
+                        date = firstDay
+                    }
                 }
             }
         }
@@ -886,10 +1027,7 @@ struct RecordTransactionView: View {
             return
         }
 
-        // Grab the user’s chosen category
         let chosenCategory = monthCategories[selectedCategoryIndex]
-        
-        // Create the transaction with that exact ID
         let newTx = Transaction(
             categoryID: chosenCategory.id,
             date: date,
@@ -897,13 +1035,11 @@ struct RecordTransactionView: View {
             description: titleString
         )
         transactions.append(newTx)
-
-        // Refresh rollover if needed
         refreshRollover()
-
         dismiss()
     }
 }
+
 
 // MARK: - Month Picker
 
@@ -1516,12 +1652,17 @@ struct ContentView: View {
                             savingsRecords: $savingsRecords,
                             goals: $goals,
                             categories: $categories,
-                            monthlyBudgets: $monthlyBudgets
+                            monthlyBudgets: $monthlyBudgets,
+                            rolloverLeftover: $rolloverLeftover,                // NEW
+                            rolloverSpentByMonth: $rolloverSpentByMonth,        // NEW
+                            selectedMonth: selectedMonth
                         )) {
                             Image(systemName: "list.bullet")
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
+
+
 
 
                         // In ContentView toolbar (where you have NavigationLink to SettingsView):
@@ -1736,7 +1877,6 @@ struct ContentView: View {
 
 }
 
-
 struct AddGoalView: View {
     @Binding var goals: [SavingsGoal]
     @Environment(\.dismiss) private var dismiss
@@ -1775,13 +1915,19 @@ struct AddGoalView: View {
     }
     
     private func saveGoal() {
+        // Check for duplicate goal names (case-insensitive)
+        if goals.contains(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame }) {
+            errorMessage = "A goal with that name already exists."
+            return
+        }
+        
         guard !title.isEmpty else {
-            errorMessage = "Please enter a title"
+            errorMessage = "Please enter a title."
             return
         }
         
         guard let amountValue = Double(amount), amountValue > 0 else {
-            errorMessage = "Please enter a valid amount"
+            errorMessage = "Please enter a valid amount."
             return
         }
         
@@ -1796,6 +1942,7 @@ struct AddGoalView: View {
     }
 }
 
+
 // MARK: - New Budget View
 
 //struct NewBudgetView: View {
@@ -1806,12 +1953,12 @@ struct AddGoalView: View {
 //
 //    // Local editable copy of the categories for this new budget
 //    @State private var customBudgets: [CategoryBudget] = []
-//    
+//
 //    // A computed property to sum the allocations
 //    var totalAllocation: Double {
 //        customBudgets.reduce(0) { $0 + $1.total }
 //    }
-//    
+//
 //    var body: some View {
 //        NavigationStack {
 //            List {
@@ -1836,7 +1983,7 @@ struct AddGoalView: View {
 //                    }
 //                    .onDelete(perform: deleteCategory)
 //                }
-//                
+//
 //                Section(header:
 //                    Text("Total Allocation: \(formatAmount(totalAllocation))")
 //                        .font(.subheadline)
@@ -1873,12 +2020,12 @@ struct AddGoalView: View {
 //            }
 //        }
 //    }
-//    
+//
 //    private func addCategory() {
 //        let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
 //        customBudgets.append(newCategory)
 //    }
-//    
+//
 //    private func deleteCategory(at offsets: IndexSet) {
 //        customBudgets.remove(atOffsets: offsets)
 //    }
@@ -2212,6 +2359,12 @@ struct TransactionsAndAllocationsView: View {
     @Binding var categories: [CategoryBudget]
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
     
+    // NEW bindings:
+    @Binding var rolloverLeftover: Double
+    @Binding var rolloverSpentByMonth: [String: Double]
+    
+    let selectedMonth: Date
+    
     @State private var selectedSegment = 0
     // NEW: This holds the index in the original transactions array for the transaction being edited.
     @State private var editingTransactionIndex: Int? = nil
@@ -2270,6 +2423,10 @@ struct TransactionsAndAllocationsView: View {
                     goals[goalIndex].currentAmount = 0
                 }
             }
+            // Use the record’s date (or you could use selectedMonth if that’s always correct)
+            let key = monthKey(for: recordToDelete.date)
+            rolloverSpentByMonth[key, default: 0] -= recordToDelete.amount
+            rolloverLeftover += recordToDelete.amount
         }
     }
     
@@ -2373,13 +2530,17 @@ struct TransactionsAndAllocationsView: View {
             .listStyle(InsetGroupedListStyle())
         }
         .navigationTitle("All Data")
-        // Present the EditTransactionView sheet when editingTransactionIndex is not nil.
-        .sheet(isPresented: Binding(get: { editingTransactionIndex != nil }, set: { if !$0 { editingTransactionIndex = nil } })) {
-            if let index = editingTransactionIndex {
-                // Pass a binding to the transaction in the original array.
-                EditTransactionView(transaction: $transactions[index], categories: $categories)
+            .sheet(isPresented: Binding(get: { editingTransactionIndex != nil },
+                                        set: { if !$0 { editingTransactionIndex = nil } })) {
+                if let index = editingTransactionIndex {
+                    EditTransactionView(
+                        transaction: $transactions[index],
+                        monthBudgets: monthlyBudgets,
+                        globalCategories: categories
+                    )
+                }
             }
-        }
+
     }
 }
 
@@ -2398,5 +2559,3 @@ extension Date {
 #Preview {
     ContentView()
 }
-
-

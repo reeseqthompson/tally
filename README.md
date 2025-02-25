@@ -4,8 +4,8 @@
 tally is a personal finance tracking app built using SwiftUI. It helps users manage their budgets, track transactions, and set savings goals.
 
 ## Features
-- **Budget Management:** Organize your spending into customizable categories.
-- **Transaction Tracking:** Record and view your monthly expenses.
+- **Budget Management:** Organize spending into customizable categories.
+- **Transaction Tracking:** Record and view monthly expenses.
 - **Savings Goals:** Set goals and allocate funds to achieve them.
 - **Rollover Balance:** Carry over unspent funds to future months.
 
@@ -23,9 +23,6 @@ tally is a personal finance tracking app built using SwiftUI. It helps users man
 ## Requirements
 - Xcode 14.0 or later
 - iOS 16.0 or later
-
-## Contribution
-Feel free to fork the repository, make updates, and submit a pull request.
 
 ## License
 This project is licensed under the MIT License.

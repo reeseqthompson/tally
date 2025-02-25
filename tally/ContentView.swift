@@ -802,6 +802,9 @@ struct SettingsView: View {
     @Binding var transactions: [Transaction]
     @Binding var allocations: [CategoryAllocation]
     
+    @AppStorage("showGraphCard") private var showGraphCard: Bool = true
+    @AppStorage("showCalendarCard") private var showCalendarCard: Bool = true
+    
     // The month for which we are editing the budget.
     let selectedMonth: Date
     
@@ -820,6 +823,13 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                
+                // New Display Options Section
+                Section("Display Options") {
+                    Toggle("Show Spending Graph", isOn: $showGraphCard)
+                    Toggle("Show Calendar", isOn: $showCalendarCard)
+                }
+                
                 Section(header: Text("Edit Budget Categories for \(monthYearFormatter.string(from: selectedMonth))")) {
                     ForEach(editedBudget.indices, id: \.self) { index in
                         VStack(alignment: .leading) {
@@ -868,16 +878,39 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Budget Settings")
+            // Hide the default back button…
+            .navigationBarBackButtonHidden(true)
+            // …and add our custom back button in the leading toolbar position.
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+
+                            Text("Cancel")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         saveChanges()
                     }
                 }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
             }
+//            .navigationTitle("Budget Settings")
+//            .toolbar {
+//                ToolbarItem(placement: .confirmationAction) {
+//                    Button("Save") {
+//                        saveChanges()
+//                    }
+//                }
+//                ToolbarItem(placement: .cancellationAction) {
+//                    Button("Cancel") { dismiss() }
+//                }
+//            }
             .onAppear {
                 let key = monthKey(for: selectedMonth)
                 if let currentBudget = monthlyBudgets[key] {
@@ -1518,6 +1551,9 @@ struct ContentView: View {
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
     
+    @AppStorage("showGraphCard") private var showGraphCard: Bool = true
+    @AppStorage("showCalendarCard") private var showCalendarCard: Bool = true
+    
     @State private var rolloverSpentByMonth: [String: Double] = [:]
     
     @State private var categories: [CategoryBudget] = [
@@ -1578,9 +1614,22 @@ struct ContentView: View {
             sum + (cat.total + (allocDict[cat.id] ?? 0))
         }
     }
-
-
     
+    var actualMonthlyBudget: Double {
+        let key = monthKey(for: selectedMonth)
+        guard let categoriesForThisMonth = monthlyBudgets[key] else {
+            return 0
+        }
+        // Sum each category’s `total`
+        let baseSum = categoriesForThisMonth.reduce(0) { $0 + $1.total }
+        
+        // If you have allocations for this month, you can add them too, e.g.:
+        let monthlyAllocations = allocations.filter { sameMonth($0.month, selectedMonth) }
+        let allocationSum = monthlyAllocations.reduce(0) { $0 + $1.allocatedAmount }
+        
+        return baseSum + allocationSum
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -1609,16 +1658,22 @@ struct ContentView: View {
                             categories: $categories,
                             selectedMonth: selectedMonth
                         )
-
-                        CalendarCard(
-                            transactions: transactions,
-                            selectedMonth: selectedMonth,
-                            categories: monthlyBudgets[monthKey(for: selectedMonth)] ?? categories
-                        )
-
+                        
+                        if showGraphCard {
+                            SpendingGraphCardView(transactions: transactions, selectedMonth: selectedMonth, overallBudget: actualMonthlyBudget)
+                        }
+                        if showCalendarCard {
+                            CalendarCard(
+                                transactions: transactions,
+                                selectedMonth: selectedMonth,
+                                categories: monthlyBudgets[monthKey(for: selectedMonth)] ?? categories
+                            )
+                        }
+                        
                     }
                     .padding(.top, 8) // Reduced top padding from default to 8 points
                 }
+                .scrollIndicators(.hidden)
                 // just removed this REESE
 //                VStack {
 //                    Spacer()

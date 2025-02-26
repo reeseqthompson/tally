@@ -341,7 +341,7 @@ struct OverallBudgetRow: View {
                 // Text on top
                 HStack {
                     let textColor: Color = (remaining < 0) ? .red : .white
-                    Text("Overall Budget")
+                    Text("💰 Overall Budget")
                         .foregroundColor(textColor)
                         .padding(.leading, 8)
                     Spacer()
@@ -625,31 +625,75 @@ struct AllTransactionsView: View {
     @Binding var transactions: [Transaction]
     @Binding var categories: [CategoryBudget]
     let selectedMonth: Date
+    
+    @AppStorage("sortAscending") private var sortAscending: Bool = false
 
+    // Filter the transactions for the selected month.
     var monthlyTx: [Transaction] {
-        transactionsForMonth(transactions, selectedMonth: selectedMonth)
+        let tx = transactionsForMonth(transactions, selectedMonth: selectedMonth)
+        return sortAscending ? tx.sorted { $0.date < $1.date } : tx.sorted { $0.date > $1.date }
+    }
+
+    // Compute overall allocated amount from the provided categories.
+    var totalAllocated: Double {
+        categories.reduce(0) { $0 + $1.total }
     }
     
+    // Sum all transactions' amounts for the month.
+    var totalSpent: Double {
+        monthlyTx.map { $0.amount }.reduce(0, +)
+    }
+    
+    // Calculate remaining budget.
+    var totalRemaining: Double {
+        totalAllocated - totalSpent
+    }
+    
+    // Helper to look up the category name for a given transaction.
     private func categoryName(for id: UUID) -> String {
         categories.first(where: { $0.id == id })?.name ?? "Unknown Category"
     }
     
     var body: some View {
         List {
-            ForEach(monthlyTx) { tx in
+            // Header section displaying overall budget figures.
+            Section(header: Text("Overview")) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(tx.description)
-                            .font(.headline)
-                        Text("\(categoryName(for: tx.categoryID)) • \(formatDate(tx.date))")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                    Text("Total in Budget:")
                     Spacer()
-                    Text(formatPreciseAmount(tx.amount))
+                    Text(formatPreciseAmount(totalAllocated))
+                }
+                HStack {
+                    Text("Total Spent:")
+                    Spacer()
+                    Text(formatPreciseAmount(totalSpent))
                         .foregroundColor(.red)
                 }
-                .padding(.vertical, 4)
+                HStack {
+                    Text("Total Remaining:")
+                    Spacer()
+                    Text(formatPreciseAmount(totalRemaining))
+                        .foregroundColor(totalRemaining < 0 ? .red : .primary)
+                }
+            }
+            
+            Section(header: Text("Transactions")) {
+                // List each individual transaction.
+                ForEach(monthlyTx) { tx in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(tx.description)
+                                .font(.headline)
+                            Text("\(categoryName(for: tx.categoryID)) • \(formatDate(tx.date))")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(formatPreciseAmount(tx.amount))
+                            .foregroundColor(.red)
+                    }
+                    .padding(.vertical, 4)
+                }
             }
         }
         .navigationTitle("\(monthYearFormatter.string(from: selectedMonth))")
@@ -659,31 +703,76 @@ struct AllTransactionsView: View {
 
 struct TransactionLogView: View {
     @Environment(\.dismiss) var dismiss
+
     let category: CategoryBudget
     let transactions: [Transaction]
     let selectedMonth: Date
     
+    @AppStorage("sortAscending") private var sortAscending: Bool = false
+
+    // Filter transactions to only those that belong to this category in the selected month.
     var filteredTx: [Transaction] {
-        transactionsForMonth(transactions, selectedMonth: selectedMonth)
+        let tx = transactionsForMonth(transactions, selectedMonth: selectedMonth)
             .filter { $0.categoryID == category.id }
+        return sortAscending ? tx.sorted { $0.date < $1.date } : tx.sorted { $0.date > $1.date }
+    }
+    
+    // Calculate the total amount spent in this category this month.
+    
+    var totalTotal: Double {
+        category.total
+    }
+    
+    var totalSpent: Double {
+        filteredTx.map { $0.amount }.reduce(0, +)
+    }
+    
+    // Calculate the remaining budget. (Using category.total as the allocated amount.)
+    var totalRemaining: Double {
+        category.total - totalSpent
     }
     
     var body: some View {
-        List(filteredTx) { t in
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(t.description)
-                        .font(.headline)
-                    // Display the transaction date
-                    Text(formatDate(t.date))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+        List {
+            // Header with totals
+            Section(header: Text("Overview")) {
+                HStack {
+                    Text("Total in Budget:")
+                    Spacer()
+                    Text(formatPreciseAmount(totalTotal))
                 }
-                Spacer()
-                Text(formatPreciseAmount(t.amount))
-                    .foregroundColor(.red)
+                HStack {
+                    Text("Total Spent:")
+                    Spacer()
+                    Text(formatPreciseAmount(totalSpent))
+                        .foregroundColor(.red)
+                }
+                HStack {
+                    Text("Total Remaining:")
+                    Spacer()
+                    Text(formatPreciseAmount(totalRemaining))
+                        .foregroundColor(totalRemaining < 0 ? .red : .primary)
+                }
             }
-            .padding(.vertical, 4)
+            Section(header: Text("Transactions")) {
+                // List individual transactions
+                ForEach(filteredTx) { t in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(t.description)
+                                .font(.headline)
+                            Text(formatDate(t.date))
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(formatPreciseAmount(t.amount))
+                            .foregroundColor(.red)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            
         }
         .navigationTitle(category.name)
         .gesture(
@@ -696,6 +785,7 @@ struct TransactionLogView: View {
         )
     }
 }
+
 
 
 struct EditTransactionView: View {
@@ -804,6 +894,7 @@ struct SettingsView: View {
     
     @AppStorage("showGraphCard") private var showGraphCard: Bool = true
     @AppStorage("showCalendarCard") private var showCalendarCard: Bool = true
+    @AppStorage("sortAscending") private var sortAscending: Bool = false
     
     // The month for which we are editing the budget.
     let selectedMonth: Date
@@ -828,6 +919,7 @@ struct SettingsView: View {
                 Section("Display Options") {
                     Toggle("Show Spending Graph", isOn: $showGraphCard)
                     Toggle("Show Calendar", isOn: $showCalendarCard)
+                    Toggle("Sort Transactions Ascending", isOn: $sortAscending)
                 }
                 
                 Section(header: Text("Edit Budget Categories for \(monthYearFormatter.string(from: selectedMonth))")) {
@@ -2176,7 +2268,7 @@ struct DailyTransactionsView: View {
                 Text("No transactions for this day.")
                     .foregroundColor(.secondary)
             } else {
-                ForEach(transactions) { tx in
+                ForEach(transactions.sorted { $0.date < $1.date }) { tx in
                     HStack {
                         VStack(alignment: .leading) {
                             Text(tx.description)
@@ -2420,20 +2512,22 @@ struct TransactionsAndAllocationsView: View {
     
     let selectedMonth: Date
     
+    @AppStorage("sortAscending") private var sortAscending: Bool = false
+    
     @State private var selectedSegment = 0
     // NEW: This holds the index in the original transactions array for the transaction being edited.
     @State private var editingTransactionIndex: Int? = nil
     
     var sortedTransactions: [Transaction] {
-        transactions.sorted { $0.date < $1.date }
+        transactions.sorted { sortAscending ? $0.date < $1.date : $0.date > $1.date }
     }
-    
+        
     var sortedAllocations: [CategoryAllocation] {
-        allocations.sorted { $0.month < $1.month }
+        allocations.sorted { sortAscending ? $0.month < $1.month : $0.month > $1.month }
     }
-    
+        
     var sortedSavings: [SavingsRecord] {
-        savingsRecords.sorted { $0.date < $1.date }
+        savingsRecords.sorted { sortAscending ? $0.date < $1.date : $0.date > $1.date }
     }
     
     // Helper to get a category name from its id.

@@ -57,11 +57,10 @@
 4. **Transaction Recording**  
    - **Record Button (in bottom toolbar)**: Opens a transaction entry form.  
    - **Transaction Form**:
-     - Name/Description of the transaction
+     - Name of the transaction
      - Dollar value
      - Category (e.g., Groceries, Entertainment)
      - Date (default to current date but user can adjust)
-     - Optional Notes
 
 5. **Transaction History**  
    - Separate screen listing all transactions in reverse chronological order (most recent first).  

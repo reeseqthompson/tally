@@ -259,6 +259,8 @@ struct CategoryRow: View {
     let category: CategoryBudget
     let spentThisMonth: Double
     let allocatedAmount: Double
+    
+    @AppStorage("useBlackRowText") private var useBlackRowText: Bool = false
 
     private var fractionUsed: Double {
         guard allocatedAmount > 0 else { return 0 }
@@ -272,12 +274,17 @@ struct CategoryRow: View {
     }
 
     // Fill color based on how much is left
+    // 1) Read the user’s chosen scheme from AppStorage.
+    @AppStorage("categoryColorScheme") private var categoryColorSchemeRaw: String = CategoryColorScheme.classic.rawValue
+
+    // 2) Convert raw string back to CategoryColorScheme with a default fallback.
+    private var currentScheme: CategoryColorScheme {
+        CategoryColorScheme(rawValue: categoryColorSchemeRaw) ?? .classic
+    }
+
+    // 3) Use the scheme to pick the fill color:
     private var fillColor: Color {
-        switch fractionRemaining {
-        case 0.5...:       return .green
-        case 0.2..<0.5:    return .yellow
-        default:           return .red
-        }
+        currentScheme.fillColor(for: fractionRemaining)
     }
 
     var body: some View {
@@ -294,7 +301,7 @@ struct CategoryRow: View {
 
                 // Text on top
                 HStack {
-                    let textColor: Color = (remainingDisplay < 0) ? .red : .white
+                    let textColor: Color = (remainingDisplay < 0) ? .red : ((useBlackRowText) ? .black : .white)
                     Text(category.name)
                         .foregroundColor(textColor)
                         .padding(.leading, 8)
@@ -316,6 +323,10 @@ struct CategoryRow: View {
 struct OverallBudgetRow: View {
     let totalAllocated: Double
     let totalSpent: Double
+    
+    @AppStorage("useBlackRowText") private var useBlackRowText: Bool = false
+    @AppStorage("overallBudgetHex") private var overallBudgetHex: String = "#008080"
+    @AppStorage("showBudgetEmoji") private var showBudgetEmoji: Bool = true
 
     private var fractionRemaining: Double {
         guard totalAllocated > 0 else { return 1 }
@@ -335,13 +346,14 @@ struct OverallBudgetRow: View {
 
                 // The fill bar
                 Rectangle()
-                    .fill(Color.teal)
+                    .fill(Color(hex: overallBudgetHex) ?? .teal)
                     .frame(width: geo.size.width * fractionRemaining)
 
                 // Text on top
                 HStack {
-                    let textColor: Color = (remaining < 0) ? .red : .white
-                    Text("💰 Overall Budget")
+                    let textColor: Color = (remaining < 0) ? .red : ((useBlackRowText) ? .black : .white)
+                    let budgetLabel = showBudgetEmoji ? "💰 Overall Budget" : "Overall Budget"
+                    Text(budgetLabel)
                         .foregroundColor(textColor)
                         .padding(.leading, 8)
                     Spacer()
@@ -375,7 +387,7 @@ struct GoalCardView: View {
             
             ProgressView(value: goal.currentAmount, total: goal.targetAmount)
                 .progressViewStyle(LinearProgressViewStyle())
-                .accentColor(.blue)
+                .accentColor(goal.currentAmount >= goal.targetAmount ? .green : .blue)
         }
         .padding()
         // Use the cardBackground for consistency with your other card views.
@@ -390,8 +402,36 @@ struct GoalCardView: View {
 struct GoalsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var goals: [SavingsGoal]
+    
     @State private var showAddGoalMenu = false
     @State private var editingGoalIndex: Int? = nil
+
+    // 1) Only those not fully funded
+    //    Sort ascending by (target - current) so the one requiring the least money appears first.
+    private var currentGoals: [(index: Int, goal: SavingsGoal)] {
+        goals.enumerated()
+            .filter { $0.element.currentAmount < $0.element.targetAmount }
+            .sorted { lhs, rhs in
+                let lhsNeeded = lhs.element.targetAmount - lhs.element.currentAmount
+                let rhsNeeded = rhs.element.targetAmount - rhs.element.currentAmount
+                return lhsNeeded < rhsNeeded
+            }
+            .map { (index: $0.offset, goal: $0.element) } // <-- Transform offset/element to index/goal
+    }
+
+    // 2) Those fully funded
+    //    Sort descending by (currentAmount - targetAmount) so the “most recently completed” is first
+    //    (assuming bigger “over-completion” means more recently finished).
+    private var completedGoals: [(index: Int, goal: SavingsGoal)] {
+        goals.enumerated()
+            .filter { $0.element.currentAmount >= $0.element.targetAmount }
+            .sorted { lhs, rhs in
+                let lhsOver = lhs.element.currentAmount - lhs.element.targetAmount
+                let rhsOver = rhs.element.currentAmount - rhs.element.targetAmount
+                return lhsOver > rhsOver
+            }
+            .map { (index: $0.offset, goal: $0.element) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -399,7 +439,8 @@ struct GoalsView: View {
                 Color.viewBackground(for: colorScheme)
                     .ignoresSafeArea()
                 
-                if goals.isEmpty {
+                // If no current or completed goals exist, show old “No Goals” button
+                if currentGoals.isEmpty && completedGoals.isEmpty {
                     Button(action: {
                         showAddGoalMenu = true
                     }) {
@@ -414,32 +455,64 @@ struct GoalsView: View {
                         .padding()
                     }
                 } else {
+                    // Otherwise, show a List with two sections.
                     List {
-                        ForEach(Array(goals.enumerated()), id: \.element.id) { index, goal in
-                            GoalCardView(goal: $goals[index], onDelete: { })
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    // Swap the order: first Edit, then Delete
-                                    Button {
-                                        editingGoalIndex = index
-                                    } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    .tint(.blue)
-                                    
-                                    if goal.currentAmount == 0 {
-                                        Button(role: .destructive) {
-                                            goals.remove(at: index)
+                        // ---------- CURRENT GOALS ----------
+                        Section("Current Goals") {
+                            ForEach(currentGoals, id: \.goal.id) { item in
+                                GoalCardView(goal: $goals[item.index], onDelete: { })
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        // Edit
+                                        Button {
+                                            editingGoalIndex = item.index
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            Label("Edit", systemImage: "pencil")
+                                        }
+                                        .tint(.blue)
+                                        
+                                        // Delete only if currentAmount == 0
+                                        if goals[item.index].currentAmount == 0 {
+                                            Button(role: .destructive) {
+                                                goals.remove(at: item.index)
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
                                         }
                                     }
-                                }
-                                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
+
+                        // ---------- COMPLETED GOALS ----------
+                        Section("Completed Goals") {
+                            ForEach(completedGoals, id: \.goal.id) { item in
+                                GoalCardView(goal: $goals[item.index], onDelete: { })
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        // Edit
+                                        Button {
+                                            editingGoalIndex = item.index
+                                        } label: {
+                                            Label("Edit", systemImage: "pencil")
+                                        }
+                                        .tint(.blue)
+                                        
+                                        // Delete only if currentAmount == 0
+                                        if goals[item.index].currentAmount == 0 {
+                                            Button(role: .destructive) {
+                                                goals.remove(at: item.index)
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                        }
+                                    }
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                            }
                         }
                     }
-                    // Remove the List's background so the cards fill the width
                     .listStyle(PlainListStyle())
                     .scrollContentBackground(.hidden)
                 }
@@ -460,8 +533,8 @@ struct GoalsView: View {
                 get: { editingGoalIndex != nil },
                 set: { if !$0 { editingGoalIndex = nil } }
             )) {
-                if let index = editingGoalIndex {
-                    EditGoalView(goal: $goals[index])
+                if let idx = editingGoalIndex {
+                    EditGoalView(goal: $goals[idx])
                 }
             }
             .navigationTitle("Savings Goals")
@@ -885,83 +958,133 @@ struct EditTransactionView: View {
 
 // MARK: - Settings
 struct SettingsView: View {
-    // Bind the entire monthlyBudgets dictionary, the global categories,
-    // and also the transactions and allocations for the selected month.
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
     @Binding var globalCategories: [CategoryBudget]
     @Binding var transactions: [Transaction]
     @Binding var allocations: [CategoryAllocation]
-    
+
     @AppStorage("showGraphCard") private var showGraphCard: Bool = true
     @AppStorage("showCalendarCard") private var showCalendarCard: Bool = true
     @AppStorage("sortAscending") private var sortAscending: Bool = false
-    
-    // The month for which we are editing the budget.
+
+    @AppStorage("categoryColorScheme") private var categoryColorSchemeRaw: String = CategoryColorScheme.classic.rawValue
+    @AppStorage("overallBudgetHex") private var overallBudgetHex: String = "#008080"
+    @AppStorage("useBlackRowText") private var useBlackRowText: Bool = false
+    @AppStorage("showBudgetEmoji") private var showBudgetEmoji: Bool = true
+
+    @AppStorage("customColorHigh") private var customColorHigh: String = "#00FF00"
+    @AppStorage("customColorMid")  private var customColorMid:  String = "#FFFF00"
+    @AppStorage("customColorLow")  private var customColorLow:  String = "#FF0000"
+
+    @State private var colorHigh: Color = .green
+    @State private var colorMid:  Color = .yellow
+    @State private var colorLow:  Color = .red
+    @State private var overallBudgetColor: Color = .teal
+
     let selectedMonth: Date
-    
-    // Local state copy for editing the monthly budget.
+
+    // We'll load these only if a budget exists for the month
     @State private var editedBudget: [CategoryBudget] = []
     @State private var errorMessage: String = ""
+
     @Environment(\.dismiss) private var dismiss
-    
-    // Computed property: true if there is any transaction or allocation in this month.
+
+    // If there's any data in this month, we won't allow deleting it.
     private var hasBudgetData: Bool {
         let tx = transactionsForMonth(transactions, selectedMonth: selectedMonth)
         let alloc = allocations.filter { sameMonth($0.month, selectedMonth) }
         return !tx.isEmpty || !alloc.isEmpty
     }
-    
+
     var body: some View {
         NavigationStack {
             Form {
-                
-                // New Display Options Section
+                // GENERAL DISPLAY OPTIONS
                 Section("Display Options") {
                     Toggle("Show Spending Graph", isOn: $showGraphCard)
                     Toggle("Show Calendar", isOn: $showCalendarCard)
                     Toggle("Sort Transactions Ascending", isOn: $sortAscending)
+                    Toggle("Set Category Text Black", isOn: $useBlackRowText)
+                    Toggle("Use Emoji Icons", isOn: $showBudgetEmoji)
                 }
                 
-                Section(header: Text("Edit Budget Categories for \(monthYearFormatter.string(from: selectedMonth))")) {
-                    ForEach(editedBudget.indices, id: \.self) { index in
-                        VStack(alignment: .leading) {
-                            TextField("Category Name", text: $editedBudget[index].name)
-                            HStack {
-                                Text("Allocation:")
-                                TextField("Amount", value: $editedBudget[index].total, format: .number)
-                                    .keyboardType(.decimalPad)
+                // COLOR CUSTOMIZATION SECTION
+                Section("Color Customization") {
+                    // Category row scheme
+                    Picker("Category Row Colors", selection: $categoryColorSchemeRaw) {
+                        ForEach(CategoryColorScheme.allCases) { scheme in
+                            Text(scheme.rawValue).tag(scheme.rawValue)
+                        }
+                    }
+
+                    // Show custom pickers only if `.custom`
+                    if categoryColorSchemeRaw == CategoryColorScheme.custom.rawValue {
+                        ColorPicker("≥ 50% Remaining", selection: $colorHigh)
+                            .onChange(of: colorHigh) { newVal in
+                                customColorHigh = newVal.toHex()
+                            }
+                        ColorPicker("20%-49% Remaining", selection: $colorMid)
+                            .onChange(of: colorMid) { newVal in
+                                customColorMid = newVal.toHex()
+                            }
+                        ColorPicker("< 20% Remaining", selection: $colorLow)
+                            .onChange(of: colorLow) { newVal in
+                                customColorLow = newVal.toHex()
+                            }
+                    }
+
+                    // Overall Budget color
+                    ColorPicker("Overall Budget Color", selection: $overallBudgetColor)
+                        .onChange(of: overallBudgetColor) { newVal in
+                            overallBudgetHex = newVal.toHex()
+                        }
+                }
+
+                // EDITING MONTHLY BUDGET (only if a budget for this month already exists)
+                if monthlyBudgets[monthKey(for: selectedMonth)] != nil {
+                    Section(header: Text("Edit Budget Categories for \(monthYearFormatter.string(from: selectedMonth))")) {
+                        ForEach(editedBudget.indices, id: \.self) { index in
+                            VStack(alignment: .leading) {
+                                TextField("Category Name", text: $editedBudget[index].name)
+                                HStack {
+                                    Text("Allocation:")
+                                    TextField("Amount", value: $editedBudget[index].total, format: .number)
+                                        .keyboardType(.decimalPad)
+                                }
                             }
                         }
+                        .onDelete(perform: deleteCategory)
                     }
-                    .onDelete(perform: deleteCategory)
-                }
-                
-                Section {
-                    Button("Add Category") {
-                        addCategory()
-                    }
-                }
-                
-                // NEW: Section for deleting the entire monthly budget.
-                if !hasBudgetData {
+                    
+                    // “Add Category” button
                     Section {
-                        Button(role: .destructive) {
-                            // Delete this month’s budget by removing the key from the dictionary
-                            let key = monthKey(for: selectedMonth)
-                            monthlyBudgets.removeValue(forKey: key)
-                            dismiss()
-                        } label: {
-                            Text("Delete Budget")
+                        Button("Add Category") {
+                            addCategory()
                         }
                     }
-                } else {
-                    Section {
-                        Text("Budget cannot be deleted because there are transactions or allocations for this month.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
+                    
+                    // Deletion or "can't delete" message if there's data
+                    if !hasBudgetData {
+                        Section {
+                            Button(role: .destructive) {
+                                let key = monthKey(for: selectedMonth)
+                                monthlyBudgets.removeValue(forKey: key)
+                                dismiss()
+                            } label: {
+                                Text("Delete Budget")
+                            }
+                        }
+                    } else {
+                        Section {
+                            Text("Budget cannot be deleted because there are transactions or allocations for this month.")
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-                
+                // END "if there's a budget"
+
+                // ERROR MESSAGE SECTION, if needed
                 if !errorMessage.isEmpty {
                     Section {
                         Text(errorMessage)
@@ -969,19 +1092,17 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Budget Settings")
-            // Hide the default back button…
+            .navigationTitle("Settings")
             .navigationBarBackButtonHidden(true)
-            // …and add our custom back button in the leading toolbar position.
+            // Add custom back button + Save
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
+                    Button {
                         dismiss()
-                    }) {
+                    } label: {
                         HStack {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 17, weight: .semibold))
-
                             Text("Cancel")
                         }
                     }
@@ -992,35 +1113,30 @@ struct SettingsView: View {
                     }
                 }
             }
-//            .navigationTitle("Budget Settings")
-//            .toolbar {
-//                ToolbarItem(placement: .confirmationAction) {
-//                    Button("Save") {
-//                        saveChanges()
-//                    }
-//                }
-//                ToolbarItem(placement: .cancellationAction) {
-//                    Button("Cancel") { dismiss() }
-//                }
-//            }
             .onAppear {
+                // Sync color picks from @AppStorage
+                colorHigh  = Color(hex: customColorHigh)  ?? .green
+                colorMid   = Color(hex: customColorMid)   ?? .yellow
+                colorLow   = Color(hex: customColorLow)   ?? .red
+                overallBudgetColor = Color(hex: overallBudgetHex) ?? .teal
+
+                // Only load an existing budget if it exists.
                 let key = monthKey(for: selectedMonth)
-                if let currentBudget = monthlyBudgets[key] {
-                    editedBudget = currentBudget
+                if let current = monthlyBudgets[key] {
+                    editedBudget = current
                 } else {
-                    editedBudget = globalCategories
+                    editedBudget = []
                 }
             }
         }
     }
-    
+
     private func addCategory() {
         let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
         editedBudget.append(newCategory)
     }
-    
+
     private func deleteCategory(at offsets: IndexSet) {
-        // Before deleting, check if any category being removed has data.
         for index in offsets {
             let cat = editedBudget[index]
             if hasDataForCategory(categoryID: cat.id) {
@@ -1030,28 +1146,38 @@ struct SettingsView: View {
         }
         editedBudget.remove(atOffsets: offsets)
     }
-    
+
     private func saveChanges() {
         let key = monthKey(for: selectedMonth)
-        // Compare original budget (if any) with the edited one.
+        
+        // If there's no budget for this month, we skip creating a new one.
+        guard monthlyBudgets[key] != nil else {
+            dismiss()
+            return
+        }
+
+        // Otherwise, proceed with normal checks
         let originalBudget = monthlyBudgets[key] ?? []
         let originalIDs = Set(originalBudget.map { $0.id })
         let editedIDs = Set(editedBudget.map { $0.id })
         let removedIDs = originalIDs.subtracting(editedIDs)
-        // If any removed category has data, do not allow saving.
+        
         for removedID in removedIDs {
             if hasDataForCategory(categoryID: removedID) {
-                errorMessage = "Cannot remove a category that has transactions or allocations for this month."
+                errorMessage = "Cannot remove a category that has transactions or allocations."
                 return
             }
         }
+        
         monthlyBudgets[key] = editedBudget
         dismiss()
     }
-    
+
     private func hasDataForCategory(categoryID: UUID) -> Bool {
-        let txForCat = transactionsForMonth(transactions, selectedMonth: selectedMonth).filter { $0.categoryID == categoryID }
-        let allocForCat = allocations.filter { sameMonth($0.month, selectedMonth) && $0.categoryID == categoryID }
+        let txForCat = transactionsForMonth(transactions, selectedMonth: selectedMonth)
+            .filter { $0.categoryID == categoryID }
+        let allocForCat = allocations
+            .filter { sameMonth($0.month, selectedMonth) && $0.categoryID == categoryID }
         return !txForCat.isEmpty || !allocForCat.isEmpty
     }
 }
@@ -1636,6 +1762,80 @@ struct RecordTransactionButton: View {
         // .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2) // Added shadow for consistency
     }
 }
+
+/// Stores various color schemes for category rows.
+enum CategoryColorScheme: String, CaseIterable, Identifiable, Codable {
+    case classic = "Classic"
+    case pastel = "Pastel"
+    case darkMode = "Dark Mode"
+    case pinkShades = "Pink Shades"
+    case warmTones = "Warm Tones"
+    case custom = "Custom"
+    
+    var id: String { self.rawValue }
+    
+    /// Returns the fill color for a given fractionRemaining based on the chosen scheme.
+    func fillColor(for fractionRemaining: Double) -> Color {
+        switch self {
+        case .classic:
+            // Original “classic” logic:
+            switch fractionRemaining {
+            case 0.5...:       return .green
+            case 0.2..<0.5:    return .yellow
+            default:           return .red
+            }
+        
+        case .pastel:
+            // Gentle pastel colors:
+            switch fractionRemaining {
+            case 0.5...:       return Color(hex: "#C1DB9B") ?? .blue // pastel green
+            case 0.2..<0.5:    return Color(hex: "#FDF9AC") ?? .blue // pastel yellow
+            default:           return Color(hex: "#E3968A") ?? .blue // pastel red/pink
+            }
+            
+        case .darkMode:
+            // Dark colors:
+            switch fractionRemaining {
+            case 0.5...:       return Color(hex: "#2F3C1B") ?? .blue // dark green
+            case 0.2..<0.5:    return Color(hex: "#4F3F18") ?? .blue // dark yellow
+            default:           return Color(hex: "#4D2310") ?? .blue // dark red
+            }
+        
+        case .pinkShades:
+            // Three variants of pink:
+            switch fractionRemaining {
+            case 0.5...:       return Color(hex: "#EED5E0") ?? .blue // lighter pink
+            case 0.2..<0.5:    return Color(hex: "#E4CCF8") ?? .blue // medium pink
+            default:           return Color(hex: "#D4CAF6") ?? .blue // darker pink
+            }
+            
+        case .warmTones:
+            // A few orange/red/brownish warm tones:
+            switch fractionRemaining {
+            case 0.5...:       return Color(hex: "#F3AF3D") ?? .blue // orangey
+            case 0.2..<0.5:    return Color(hex: "#ED732E") ?? .blue // redorangey
+            default:           return Color(hex: "#EB512E") ?? .blue // reddy
+            }
+        
+        case .custom:
+                    // We'll retrieve custom color hex values from AppStorage next
+                    let highHex = UserDefaults.standard.string(forKey: "customColorHigh") ?? "#00FF00"
+                    let midHex  = UserDefaults.standard.string(forKey: "customColorMid")  ?? "#FFFF00"
+                    let lowHex  = UserDefaults.standard.string(forKey: "customColorLow")  ?? "#FF0000"
+
+                    let highColor = Color(hex: highHex) ?? .green
+                    let midColor  = Color(hex: midHex)  ?? .yellow
+                    let lowColor  = Color(hex: lowHex)  ?? .red
+
+                    switch fractionRemaining {
+                    case 0.5...:       return highColor
+                    case 0.2..<0.5:    return midColor
+                    default:           return lowColor
+                    }
+        }
+    }
+}
+
 
 // MARK: - ContentView
 

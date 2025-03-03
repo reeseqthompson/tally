@@ -172,7 +172,7 @@ struct SpendingGraphCardView: View {
                             .contentShape(Rectangle())
                             // Use a highPriorityGesture for the long press.
                             .highPriorityGesture(
-                                LongPressGesture(minimumDuration: 0.5)
+                                LongPressGesture(minimumDuration: 0.3)
                                     .onEnded { _ in
                                         longPressActive = true
                                         let generator = UIImpactFeedbackGenerator(style: .medium)

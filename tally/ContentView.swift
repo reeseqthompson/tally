@@ -1845,6 +1845,7 @@ struct ContentView: View {
     
     @AppStorage("showGraphCard") private var showGraphCard: Bool = true
     @AppStorage("showCalendarCard") private var showCalendarCard: Bool = true
+    @AppStorage("hasLaunchedBefore") var hasLaunchedBefore: Bool = false
     
     @State private var rolloverSpentByMonth: [String: Double] = [:]
     
@@ -2037,6 +2038,13 @@ struct ContentView: View {
 
             .navigationBarTitleDisplayMode(.large)
         }
+        .fullScreenCover(isPresented: Binding(get: { !hasLaunchedBefore }, set: { _ in })) {
+            WelcomeView(
+                monthlyBudgets: $monthlyBudgets,
+                globalCategories: $categories,
+                selectedMonth: $selectedMonth
+            )
+        }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .inactive || newPhase == .background {
                 saveAllData()
@@ -2076,44 +2084,44 @@ struct ContentView: View {
             
             rolloverLeftover = storedRollover
 
-            // Ensure December 2024 has a default budget.
-            let dec2024Key = "2024-12"
-            if monthlyBudgets[dec2024Key] == nil {
-                monthlyBudgets[dec2024Key] = categories
-            }
-
-            // Initialize January 2025 with December 2024's budget if it doesn't exist.
-            let jan2025Key = "2025-01"
-            if monthlyBudgets[jan2025Key] == nil {
-                if let decBudget = monthlyBudgets[dec2024Key] {
-                    let newBudget = decBudget.map { oldCat in
-                        CategoryBudget(
-                            id: oldCat.id,  // Assign a new unique ID
-                            name: oldCat.name,
-                            total: oldCat.total,
-                            color: oldCat.color
-                        )
-                    }
-                    monthlyBudgets[jan2025Key] = newBudget
-                } else {
-                    // Fallback default if December 2024 budget is missing
-                    monthlyBudgets[jan2025Key] = [
-                        
-                        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
-                        CategoryBudget(name: "Transportation", total: 700, color: .green),
-                        CategoryBudget(name: "Groceries", total: 900, color: .orange),
-                        CategoryBudget(name: "Healthcare", total: 200, color: .red),
-                        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
-                        CategoryBudget(name: "Misc", total: 500, color: .brown)
-//                        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
-//                        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
-//                        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
-//                        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
-//                        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
-//                        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
-                    ]
-                }
-            }
+//            // Ensure December 2024 has a default budget.
+//            let dec2024Key = "2024-12"
+//            if monthlyBudgets[dec2024Key] == nil {
+//                monthlyBudgets[dec2024Key] = categories
+//            }
+//
+//            // Initialize January 2025 with December 2024's budget if it doesn't exist.
+//            let jan2025Key = "2025-01"
+//            if monthlyBudgets[jan2025Key] == nil {
+//                if let decBudget = monthlyBudgets[dec2024Key] {
+//                    let newBudget = decBudget.map { oldCat in
+//                        CategoryBudget(
+//                            id: oldCat.id,  // Assign a new unique ID
+//                            name: oldCat.name,
+//                            total: oldCat.total,
+//                            color: oldCat.color
+//                        )
+//                    }
+//                    monthlyBudgets[jan2025Key] = newBudget
+//                } else {
+//                    // Fallback default if December 2024 budget is missing
+//                    monthlyBudgets[jan2025Key] = [
+//                        
+//                        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
+//                        CategoryBudget(name: "Transportation", total: 700, color: .green),
+//                        CategoryBudget(name: "Groceries", total: 900, color: .orange),
+//                        CategoryBudget(name: "Healthcare", total: 200, color: .red),
+//                        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
+//                        CategoryBudget(name: "Misc", total: 500, color: .brown)
+////                        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
+////                        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
+////                        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
+////                        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
+////                        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
+////                        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
+//                    ]
+//                }
+//            }
             
             loadGoals()
             updateRolloverLeftover()

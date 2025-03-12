@@ -33,12 +33,12 @@ extension Color {
 
 extension Color {
     static func cardBackground(for scheme: ColorScheme) -> Color {
-        // In light mode, the card is “primary” (systemBackground) and in dark mode, it’s “secondary” (a darker gray)
+        // In light mode, the card is "primary" (systemBackground) and in dark mode, it's "secondary" (a darker gray)
         return scheme == .light ? Color(UIColor.systemBackground) : Color(UIColor.secondarySystemBackground)
     }
     
     static func viewBackground(for scheme: ColorScheme) -> Color {
-        // In light mode, the overall background is “secondary” (light gray) and in dark mode, it’s “primary” (black)
+        // In light mode, the overall background is "secondary" (light gray) and in dark mode, it's "primary" (black)
         return scheme == .light ? Color(UIColor.secondarySystemBackground) : Color(UIColor.systemBackground)
     }
 }
@@ -274,7 +274,7 @@ struct CategoryRow: View {
     }
 
     // Fill color based on how much is left
-    // 1) Read the user’s chosen scheme from AppStorage.
+    // 1) Read the user's chosen scheme from AppStorage.
     @AppStorage("categoryColorScheme") private var categoryColorSchemeRaw: String = CategoryColorScheme.classic.rawValue
 
     // 2) Convert raw string back to CategoryColorScheme with a default fallback.
@@ -390,60 +390,151 @@ struct GoalCardView: View {
                 .accentColor(goal.currentAmount >= goal.targetAmount ? .green : .blue)
         }
         .padding()
-        // Use the cardBackground for consistency with your other card views.
         .background(Color.cardBackground(for: colorScheme))
         .cornerRadius(10)
         .padding(.horizontal)
     }
 }
 
-// MARK: - Goals View
+// MARK: - Goal Detail View
 
+struct GoalDetailView: View {
+    let goal: SavingsGoal
+    let records: [SavingsRecord]
+    
+    @AppStorage("sortAscending") private var sortAscending: Bool = false
+    
+    var sortedRecords: [SavingsRecord] {
+        records.filter { $0.goalID == goal.id }
+               .sorted { sortAscending ? $0.date < $1.date : $0.date > $1.date }
+    }
+    
+    var body: some View {
+        List {
+            // Overview section
+            Section(header: Text("Overview")) {
+                HStack {
+                    Text("Target Amount:")
+                    Spacer()
+                    Text(formatPreciseAmount(goal.targetAmount))
+                }
+                HStack {
+                    Text("Contributed Amount:")
+                    Spacer()
+                    Text(formatPreciseAmount(goal.currentAmount))
+                        .foregroundColor(.blue)
+                }
+                HStack {
+                    Text("Remaining:")
+                    Spacer()
+                    Text(formatPreciseAmount(goal.targetAmount - goal.currentAmount))
+                        .foregroundColor(goal.currentAmount >= goal.targetAmount ? .green : .primary)
+                }
+                
+                // Progress bar
+                ProgressView(value: goal.currentAmount, total: goal.targetAmount)
+                    .progressViewStyle(LinearProgressViewStyle())
+                    .accentColor(goal.currentAmount >= goal.targetAmount ? .green : .blue)
+            }
+            
+            // Contribution History section
+            Section(header: Text("Contribution History")) {
+                if sortedRecords.isEmpty {
+                    Text("No contributions yet")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(sortedRecords) { record in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(record.description)
+                                    .font(.headline)
+                                Text(formatDate(record.date))
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Text(formatPreciseAmount(record.amount))
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationTitle(goal.title)
+    }
+}
+
+// MARK: - Goals View
 struct GoalsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var goals: [SavingsGoal]
+    @Binding var savingsRecords: [SavingsRecord]
     
-    @State private var showAddGoalMenu = false
+    @State private var selectedGoal: SavingsGoal? = nil
+    @State private var showAddGoalMenu: Bool = false
     @State private var editingGoalIndex: Int? = nil
 
-    // 1) Only those not fully funded
-    //    Sort ascending by (target - current) so the one requiring the least money appears first.
+    // Only goals that are not fully funded.
     private var currentGoals: [(index: Int, goal: SavingsGoal)] {
         goals.enumerated()
             .filter { $0.element.currentAmount < $0.element.targetAmount }
-            .sorted { lhs, rhs in
-                let lhsNeeded = lhs.element.targetAmount - lhs.element.currentAmount
-                let rhsNeeded = rhs.element.targetAmount - rhs.element.currentAmount
+            .sorted {
+                let lhsNeeded = $0.element.targetAmount - $0.element.currentAmount
+                let rhsNeeded = $1.element.targetAmount - $1.element.currentAmount
                 return lhsNeeded < rhsNeeded
             }
-            .map { (index: $0.offset, goal: $0.element) } // <-- Transform offset/element to index/goal
+            .map { (index: $0.offset, goal: $0.element) }
     }
-
-    // 2) Those fully funded
-    //    Sort descending by (currentAmount - targetAmount) so the “most recently completed” is first
-    //    (assuming bigger “over-completion” means more recently finished).
+    
+    // Goals that are fully funded.
     private var completedGoals: [(index: Int, goal: SavingsGoal)] {
         goals.enumerated()
             .filter { $0.element.currentAmount >= $0.element.targetAmount }
-            .sorted { lhs, rhs in
-                let lhsOver = lhs.element.currentAmount - lhs.element.targetAmount
-                let rhsOver = rhs.element.currentAmount - rhs.element.targetAmount
+            .sorted {
+                let lhsOver = $0.element.currentAmount - $0.element.targetAmount
+                let rhsOver = $1.element.currentAmount - $1.element.targetAmount
                 return lhsOver > rhsOver
             }
             .map { (index: $0.offset, goal: $0.element) }
     }
-
+    
+    // Helper to build a goal row with swipe actions and tap-to-navigate.
+    private func goalRow(for item: (index: Int, goal: SavingsGoal)) -> some View {
+        GoalCardView(goal: $goals[item.index], onDelete: { })
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button {
+                    editingGoalIndex = item.index
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+                if goals[item.index].currentAmount == 0 {
+                    Button(role: .destructive) {
+                        goals.remove(at: item.index)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+            .onTapGesture {
+                selectedGoal = item.goal
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+    
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.viewBackground(for: colorScheme)
                     .ignoresSafeArea()
                 
-                // If no current or completed goals exist, show old “No Goals” button
                 if currentGoals.isEmpty && completedGoals.isEmpty {
-                    Button(action: {
+                    Button {
                         showAddGoalMenu = true
-                    }) {
+                    } label: {
                         VStack(spacing: 8) {
                             Image(systemName: "plus.circle")
                                 .font(.system(size: 50))
@@ -455,66 +546,42 @@ struct GoalsView: View {
                         .padding()
                     }
                 } else {
-                    // Otherwise, show a List with two sections.
                     List {
-                        // ---------- CURRENT GOALS ----------
-                        Section("Current Goals") {
-                            ForEach(currentGoals, id: \.goal.id) { item in
-                                GoalCardView(goal: $goals[item.index], onDelete: { })
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        // Edit
-                                        Button {
-                                            editingGoalIndex = item.index
-                                        } label: {
-                                            Label("Edit", systemImage: "pencil")
-                                        }
-                                        .tint(.blue)
-                                        
-                                        // Delete only if currentAmount == 0
-                                        if goals[item.index].currentAmount == 0 {
-                                            Button(role: .destructive) {
-                                                goals.remove(at: item.index)
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
-                                            }
-                                        }
-                                    }
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
+                        if !currentGoals.isEmpty {
+                            Section("Current Goals") {
+                                ForEach(currentGoals, id: \.goal.id) { item in
+                                    goalRow(for: item)
+                                }
                             }
                         }
-
-                        // ---------- COMPLETED GOALS ----------
-                        Section("Completed Goals") {
-                            ForEach(completedGoals, id: \.goal.id) { item in
-                                GoalCardView(goal: $goals[item.index], onDelete: { })
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        // Edit
-                                        Button {
-                                            editingGoalIndex = item.index
-                                        } label: {
-                                            Label("Edit", systemImage: "pencil")
-                                        }
-                                        .tint(.blue)
-                                        
-                                        // Delete only if currentAmount == 0
-                                        if goals[item.index].currentAmount == 0 {
-                                            Button(role: .destructive) {
-                                                goals.remove(at: item.index)
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
-                                            }
-                                        }
-                                    }
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
+                        if !completedGoals.isEmpty {
+                            Section("Completed Goals") {
+                                ForEach(completedGoals, id: \.goal.id) { item in
+                                    goalRow(for: item)
+                                }
                             }
                         }
                     }
                     .listStyle(PlainListStyle())
                     .scrollContentBackground(.hidden)
+                    
+                    // Hidden NavigationLink that pushes GoalDetailView when a goal is selected.
+                    NavigationLink(
+                        destination: Group {
+                            if let goal = selectedGoal {
+                                GoalDetailView(goal: goal, records: savingsRecords)
+                            } else {
+                                EmptyView()
+                            }
+                        },
+                        isActive: Binding(
+                            get: { selectedGoal != nil },
+                            set: { if !$0 { selectedGoal = nil } }
+                        )
+                    ) {
+                        EmptyView()
+                    }
+                    .hidden()
                 }
             }
             .toolbar {
@@ -543,9 +610,10 @@ struct GoalsView: View {
 }
 
 
+
 // MARK: - Edit Goal View
 
-/// Presents a sheet allowing the user to edit a savings goal’s title and target amount.
+/// Presents a sheet allowing the user to edit a savings goal's title and target amount.
 struct EditGoalView: View {
     @Binding var goal: SavingsGoal
     @Environment(\.dismiss) private var dismiss
@@ -560,6 +628,9 @@ struct EditGoalView: View {
                     TextField("Goal Title", text: $title)
                     TextField("Target Amount", text: $targetAmountString)
                         .keyboardType(.decimalPad)
+                        .onChange(of: targetAmountString) { newValue in
+                            targetAmountString.validateDecimalInput()
+                        }
                 }
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -577,7 +648,7 @@ struct EditGoalView: View {
             }
             .onAppear {
                 title = goal.title
-                targetAmountString = String(goal.targetAmount)
+                targetAmountString = String(format: "%.2f", goal.targetAmount)
             }
         }
     }
@@ -587,13 +658,14 @@ struct EditGoalView: View {
             errorMessage = "Please enter a valid target amount."
             return
         }
+        let roundedTarget = (newTarget * 100).rounded() / 100  // Round to 2 decimal places
         // Ensure new target is not less than the current amount allocated
-        if newTarget < goal.currentAmount {
-            errorMessage = "Target amount cannot be lower than the current saved amount (\(formatAmount(goal.currentAmount)))."
+        if roundedTarget < goal.currentAmount {
+            errorMessage = "Target amount cannot be lower than the current saved amount (\(String(format: "$%.2f", goal.currentAmount)))."
             return
         }
         goal.title = title
-        goal.targetAmount = newTarget
+        goal.targetAmount = roundedTarget
         dismiss()
     }
 }
@@ -893,10 +965,13 @@ struct EditTransactionView: View {
                     TextField("Transaction Title", text: $titleString)
                     TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
+                        .onChange(of: amountString) { newValue in
+                            amountString.validateDecimalInput()
+                        }
                     // Use a standard DatePicker (the range is not restricted here because the user may edit the date)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                         .onChange(of: date) { newDate in
-                            // When the date changes, update the picker’s list.
+                            // When the date changes, update the picker's list.
                             // If the current transaction.categoryID is not in the new list, default to the first category.
                             let cats = currentMonthCategories
                             if !cats.contains(where: { $0.id == transaction.categoryID }) {
@@ -923,7 +998,7 @@ struct EditTransactionView: View {
                 }
             }
             .onAppear {
-                amountString = String(transaction.amount)
+                amountString = String(format: "%.2f", transaction.amount)
                 titleString = transaction.description
                 date = transaction.date
                 // Set the initial selected index based on the transaction's category and its month.
@@ -944,7 +1019,7 @@ struct EditTransactionView: View {
             errorMessage = "Please enter a valid amount."
             return
         }
-        transaction.amount = newAmt
+        transaction.amount = (newAmt * 100).rounded() / 100  // Round to 2 decimal places
         transaction.description = titleString
         transaction.date = date
         let cats = currentMonthCategories
@@ -1050,13 +1125,17 @@ struct SettingsView: View {
                                     Text("Allocation:")
                                     TextField("Amount", value: $editedBudget[index].total, format: .number)
                                         .keyboardType(.decimalPad)
+                                        .onChange(of: editedBudget[index].total) { newValue in
+                                            // Round to 2 decimal places
+                                            editedBudget[index].total = (newValue * 100).rounded() / 100
+                                        }
                                 }
                             }
                         }
                         .onDelete(perform: deleteCategory)
                     }
                     
-                    // “Add Category” button
+                    // "Add Category" button
                     Section {
                         Button("Add Category") {
                             addCategory()
@@ -1123,7 +1202,11 @@ struct SettingsView: View {
                 // Only load an existing budget if it exists.
                 let key = monthKey(for: selectedMonth)
                 if let current = monthlyBudgets[key] {
-                    editedBudget = current
+                    editedBudget = current.map { cat in
+                        var copy = cat
+                        copy.total = (copy.total * 100).rounded() / 100  // Round to 2 decimal places
+                        return copy
+                    }
                 } else {
                     editedBudget = []
                 }
@@ -1132,6 +1215,7 @@ struct SettingsView: View {
     }
 
     private func addCategory() {
+        // Append a new category with default name and zero allocation.
         let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
         editedBudget.append(newCategory)
     }
@@ -1169,7 +1253,11 @@ struct SettingsView: View {
             }
         }
         
-        monthlyBudgets[key] = editedBudget
+        monthlyBudgets[key] = editedBudget.map { cat in
+            var copy = cat
+            copy.total = (copy.total * 100).rounded() / 100  // Round to 2 decimal places
+            return copy
+        }
         dismiss()
     }
 
@@ -1229,6 +1317,9 @@ struct RecordTransactionView: View {
                     TextField("Transaction Title", text: $titleString)
                     TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
+                        .onChange(of: amountString) { newValue in
+                            amountString.validateDecimalInput()
+                        }
                     // Use the computed date range to restrict selection.
                     DatePicker("Date", selection: $date, in: selectedMonthRange, displayedComponents: .date)
 
@@ -1282,7 +1373,7 @@ struct RecordTransactionView: View {
         let newTx = Transaction(
             categoryID: chosenCategory.id,
             date: date,
-            amount: amt,
+            amount: (amt * 100).rounded() / 100,  // Round to 2 decimal places
             description: titleString
         )
         transactions.append(newTx)
@@ -1712,7 +1803,7 @@ struct CategoriesCard: View {
     // Helper to create a brand-new budget (show a quick function or pass to a sheet, etc.)
     private func createNewBudget() {
         let thisKey = monthKey(for: selectedMonth)
-        // For now, we’ll just set it to an empty array.
+        // For now, we'll just set it to an empty array.
         monthlyBudgets[thisKey] = []
     }
 }
@@ -1778,7 +1869,7 @@ enum CategoryColorScheme: String, CaseIterable, Identifiable, Codable {
     func fillColor(for fractionRemaining: Double) -> Color {
         switch self {
         case .classic:
-            // Original “classic” logic:
+            // Original "classic" logic:
             switch fractionRemaining {
             case 0.5...:       return .green
             case 0.2..<0.5:    return .yellow
@@ -1850,18 +1941,12 @@ struct ContentView: View {
     @State private var rolloverSpentByMonth: [String: Double] = [:]
     
     @State private var categories: [CategoryBudget] = [
-        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
-        CategoryBudget(name: "Transportation", total: 700, color: .green),
-        CategoryBudget(name: "Groceries", total: 900, color: .orange),
-        CategoryBudget(name: "Healthcare", total: 200, color: .red),
-        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
-        CategoryBudget(name: "Misc", total: 500, color: .brown)
-//        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
-//        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
-//        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
-//        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
-//        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
-//        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
+        CategoryBudget(name: "🏠 Housing", total: 100, color: .yellow),
+        CategoryBudget(name: "🚗 Transportation", total: 100, color: .green),
+        CategoryBudget(name: "🛒 Groceries", total: 100, color: .orange),
+        CategoryBudget(name: "🏥 Healthcare", total: 100, color: .red),
+        CategoryBudget(name: "🎉 Entertainment", total: 100, color: .purple),
+        CategoryBudget(name: "📦 Other", total: 100, color: .brown)
     ]
     
     @State private var allocations: [CategoryAllocation] = []
@@ -1913,7 +1998,7 @@ struct ContentView: View {
         guard let categoriesForThisMonth = monthlyBudgets[key] else {
             return 0
         }
-        // Sum each category’s `total`
+        // Sum each category's `total`
         let baseSum = categoriesForThisMonth.reduce(0) { $0 + $1.total }
         
         // If you have allocations for this month, you can add them too, e.g.:
@@ -1978,7 +2063,7 @@ struct ContentView: View {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 40) { // Adjust spacing as needed for even distribution
                         // Goals Icon
-                        NavigationLink(destination: GoalsView(goals: $goals)) {
+                        NavigationLink(destination: GoalsView(goals: $goals, savingsRecords: $savingsRecords)) {
                             Image(systemName: "dollarsign.bank.building.fill")
                                 .font(.title2)
                                 .foregroundColor(.blue)
@@ -2009,8 +2094,6 @@ struct ContentView: View {
                                 .font(.title2)
                                 .foregroundColor(.blue)
                         }
-
-
 
 
                         // In ContentView toolbar (where you have NavigationLink to SettingsView):
@@ -2081,48 +2164,7 @@ struct ContentView: View {
                 rolloverSpentByMonth = loadedRolloverSpent
             }
 
-            
             rolloverLeftover = storedRollover
-
-//            // Ensure December 2024 has a default budget.
-//            let dec2024Key = "2024-12"
-//            if monthlyBudgets[dec2024Key] == nil {
-//                monthlyBudgets[dec2024Key] = categories
-//            }
-//
-//            // Initialize January 2025 with December 2024's budget if it doesn't exist.
-//            let jan2025Key = "2025-01"
-//            if monthlyBudgets[jan2025Key] == nil {
-//                if let decBudget = monthlyBudgets[dec2024Key] {
-//                    let newBudget = decBudget.map { oldCat in
-//                        CategoryBudget(
-//                            id: oldCat.id,  // Assign a new unique ID
-//                            name: oldCat.name,
-//                            total: oldCat.total,
-//                            color: oldCat.color
-//                        )
-//                    }
-//                    monthlyBudgets[jan2025Key] = newBudget
-//                } else {
-//                    // Fallback default if December 2024 budget is missing
-//                    monthlyBudgets[jan2025Key] = [
-//                        
-//                        CategoryBudget(name: "Housing", total: 2400, color: .yellow),
-//                        CategoryBudget(name: "Transportation", total: 700, color: .green),
-//                        CategoryBudget(name: "Groceries", total: 900, color: .orange),
-//                        CategoryBudget(name: "Healthcare", total: 200, color: .red),
-//                        CategoryBudget(name: "Entertainment", total: 700, color: .purple),
-//                        CategoryBudget(name: "Misc", total: 500, color: .brown)
-////                        CategoryBudget(name: "🏠 Housing", total: 2400, color: .yellow),
-////                        CategoryBudget(name: "🚗 Transportation", total: 700, color: .green),
-////                        CategoryBudget(name: "🛒 Groceries", total: 900, color: .orange),
-////                        CategoryBudget(name: "🏥 Healthcare", total: 200, color: .red),
-////                        CategoryBudget(name: "🎉 Entertainment", total: 700, color: .purple),
-////                        CategoryBudget(name: "🏷️ Misc", total: 500, color: .brown)
-//                    ]
-//                }
-//            }
-            
             loadGoals()
             updateRolloverLeftover()
         }
@@ -2162,7 +2204,7 @@ struct ContentView: View {
         var loopMonth = selectedMonth
         // Process only months later than January 2025
         while loopMonth > startDate {
-            // Use previous month’s transactions only if the previous month is on or after January 2025.
+            // Use previous month's transactions only if the previous month is on or after January 2025.
             if let prev = previousMonth(of: loopMonth), prev >= startDate {
                 let monthTx = transactionsForMonth(transactions, selectedMonth: prev)
                 let leftoverValue = leftoverForMonth(
@@ -2246,6 +2288,9 @@ struct AddGoalView: View {
                     TextField("Title", text: $title)
                     TextField("Target Amount", text: $amount)
                         .keyboardType(.decimalPad)
+                        .onChange(of: amount) { newValue in
+                            amount.validateDecimalInput()
+                        }
                 }
                 
                 if !errorMessage.isEmpty {
@@ -2286,9 +2331,11 @@ struct AddGoalView: View {
             return
         }
         
+        let roundedAmount = (amountValue * 100).rounded() / 100  // Round to 2 decimal places
+        
         let newGoal = SavingsGoal(
             title: title,
-            targetAmount: amountValue,
+            targetAmount: roundedAmount,
             currentAmount: 0
         )
         
@@ -2299,94 +2346,6 @@ struct AddGoalView: View {
 
 
 // MARK: - New Budget View
-
-//struct NewBudgetView: View {
-//    @Binding var monthlyBudgets: [String: [CategoryBudget]]
-//    @Binding var globalCategories: [CategoryBudget]
-//    let selectedMonth: Date
-//    @Environment(\.dismiss) private var dismiss
-//
-//    // Local editable copy of the categories for this new budget
-//    @State private var customBudgets: [CategoryBudget] = []
-//
-//    // A computed property to sum the allocations
-//    var totalAllocation: Double {
-//        customBudgets.reduce(0) { $0 + $1.total }
-//    }
-//
-//    var body: some View {
-//        NavigationStack {
-//            List {
-//                Section(header:
-//                    Text("Budget for \(monthYearFormatter.string(from: selectedMonth))")
-//                        .font(.headline)
-//                ) {
-//                    ForEach(customBudgets.indices, id: \.self) { index in
-//                        VStack(alignment: .leading, spacing: 8) {
-//                            TextField("Category Name", text: $customBudgets[index].name)
-//                                .textFieldStyle(RoundedBorderTextFieldStyle())
-//                            HStack {
-//                                Text("Allocation:")
-//                                Spacer()
-//                                TextField("Amount", value: $customBudgets[index].total, format: .number)
-//                                    .keyboardType(.decimalPad)
-//                                    .multilineTextAlignment(.trailing)
-//                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-//                            }
-//                        }
-//                        .padding(.vertical, 4)
-//                    }
-//                    .onDelete(perform: deleteCategory)
-//                }
-//
-//                Section(header:
-//                    Text("Total Allocation: \(formatAmount(totalAllocation))")
-//                        .font(.subheadline)
-//                        .foregroundColor(.secondary)
-//                ) {
-//                    EmptyView()
-//                }
-//            }
-//            .listStyle(InsetGroupedListStyle())
-//            .navigationTitle("New Budget")
-//            .toolbar {
-//                ToolbarItem(placement: .navigationBarLeading) {
-//                    Button("Cancel") { dismiss() }
-//                }
-//                ToolbarItem(placement: .navigationBarTrailing) {
-//                    Button("Save") {
-//                        monthlyBudgets[monthKey(for: selectedMonth)] = customBudgets
-//                        dismiss()
-//                    }
-//                    .disabled(customBudgets.isEmpty)
-//                }
-//                ToolbarItem(placement: .bottomBar) {
-//                    Button(action: addCategory) {
-//                        Label("Add Category", systemImage: "plus")
-//                    }
-//                    .buttonStyle(BorderedProminentButtonStyle())
-//                }
-//            }
-//            .onAppear {
-//                // Initialize with a copy of the global categories
-//                customBudgets = globalCategories.map { cat in
-//                    CategoryBudget(id: cat.id, name: cat.name, total: cat.total, color: cat.color)
-//                }
-//            }
-//        }
-//    }
-//
-//    private func addCategory() {
-//        let newCategory = CategoryBudget(name: "New Category", total: 0, color: .gray)
-//        customBudgets.append(newCategory)
-//    }
-//
-//    private func deleteCategory(at offsets: IndexSet) {
-//        customBudgets.remove(atOffsets: offsets)
-//    }
-//}
-
-
 
 struct NewBudgetView: View {
     @Binding var monthlyBudgets: [String: [CategoryBudget]]
@@ -2408,6 +2367,10 @@ struct NewBudgetView: View {
                                 Text("Allocation:")
                                 TextField("Amount", value: $customBudgets[index].total, format: .number)
                                     .keyboardType(.decimalPad)
+                                    .onChange(of: customBudgets[index].total) { newValue in
+                                        // Round to 2 decimal places
+                                        customBudgets[index].total = (newValue * 100).rounded() / 100
+                                    }
                             }
                         }
                     }
@@ -2438,7 +2401,7 @@ struct NewBudgetView: View {
                 // Initialize with a copy of the global categories.
                 customBudgets = globalCategories.map { cat in
                     // Make a copy so that changes here don't affect globalCategories.
-                    CategoryBudget(id: cat.id, name: cat.name, total: cat.total, color: cat.color)
+                    CategoryBudget(id: cat.id, name: cat.name, total: (cat.total * 100).rounded() / 100, color: cat.color)
                 }
             }
         }
@@ -2509,7 +2472,7 @@ struct DailyTransactionsView: View {
 
 // MARK: - Rollover Detail Screen
 
-/// Shows the current rollover leftover plus a short explanation of how it’s calculated.
+/// Shows the current rollover leftover plus a short explanation of how it's calculated.
 /// Also has a button to transfer funds from/to the rollover.
 struct RolloverDetailView: View {
     @Binding var rolloverLeftover: Double
@@ -2627,6 +2590,9 @@ struct TransferFundsView: View {
                 Section("Amount") {
                     TextField("Amount", text: $amountString)
                         .keyboardType(.decimalPad)
+                        .onChange(of: amountString) { newValue in
+                            amountString.validateDecimalInput()
+                        }
                 }
                 
                 if !errorMessage.isEmpty {
@@ -2651,7 +2617,8 @@ struct TransferFundsView: View {
             errorMessage = "Please enter a valid amount."
             return
         }
-        guard amount <= rolloverLeftover else {
+        let roundedAmount = (amount * 100).rounded() / 100  // Round to 2 decimal places
+        guard roundedAmount <= rolloverLeftover else {
             errorMessage = "Amount exceeds current rollover."
             return
         }
@@ -2664,14 +2631,19 @@ struct TransferFundsView: View {
                 return
             }
             // Check if the transfer would exceed the goal's target
-            if selectedGoal.currentAmount + amount > selectedGoal.targetAmount {
+            if selectedGoal.currentAmount + roundedAmount > selectedGoal.targetAmount {
                 errorMessage = "Transfer amount exceeds the goal's target."
                 return
             }
             // Proceed with the transfer if validations pass
-            goals[selectedGoalIndex].currentAmount += amount
+            goals[selectedGoalIndex].currentAmount += roundedAmount
             // Add a savings record for this transfer.
-            let newRecord = SavingsRecord(goalID: selectedGoal.id, date: Date(), amount: amount, description: "Transfer from rollover")
+            let newRecord = SavingsRecord(
+                goalID: selectedGoal.id,
+                date: Date(),
+                amount: roundedAmount,
+                description: "Transfer from \(monthYearFormatter.string(from: selectedMonth))"
+            )
             savingsRecords.append(newRecord)
         } else {
             guard !monthCategories.isEmpty else {
@@ -2682,7 +2654,7 @@ struct TransferFundsView: View {
             if let i = allocations.firstIndex(where: {
                 $0.categoryID == chosenCat.id && sameMonth($0.month, selectedMonth)
             }) {
-                allocations[i].allocatedAmount += amount
+                allocations[i].allocatedAmount += roundedAmount
             } else {
                 let firstOfThisMonth = Calendar.current.date(
                     from: Calendar.current.dateComponents([.year, .month], from: selectedMonth)
@@ -2690,19 +2662,18 @@ struct TransferFundsView: View {
                 allocations.append(CategoryAllocation(
                     categoryID: chosenCat.id,
                     month: firstOfThisMonth,
-                    allocatedAmount: amount
+                    allocatedAmount: roundedAmount
                 ))
             }
         }
         
         let key = monthKey(for: selectedMonth)
         if transferToGoal {
-            rolloverSpentByMonth[key, default: 0] += amount
+            rolloverSpentByMonth[key, default: 0] += roundedAmount
         }
-        rolloverLeftover -= amount
+        rolloverLeftover -= roundedAmount
         refreshRollover()
         dismiss()
-
     }
 }
 
@@ -2780,7 +2751,7 @@ struct TransactionsAndAllocationsView: View {
                     goals[goalIndex].currentAmount = 0
                 }
             }
-            // Use the record’s date (or you could use selectedMonth if that’s always correct)
+            // Use the record's date (or you could use selectedMonth if that's always correct)
             let key = monthKey(for: recordToDelete.date)
             rolloverSpentByMonth[key, default: 0] -= recordToDelete.amount
             rolloverLeftover += recordToDelete.amount
@@ -2868,7 +2839,7 @@ struct TransactionsAndAllocationsView: View {
                             
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Savings Goal: \(goalName)")
+                                    Text("\(goalName)")
                                         .font(.headline)
                                     Text(formatDate(record.date))
                                         .font(.subheadline)
@@ -2876,7 +2847,7 @@ struct TransactionsAndAllocationsView: View {
                                 }
                                 Spacer()
                                 Text(formatPreciseAmount(record.amount))
-                                    .foregroundColor(.red)
+                                    .foregroundColor(.blue)
                             }
                             .padding(.vertical, 4)
                         }
@@ -2916,3 +2887,26 @@ extension Date {
 #Preview {
     ContentView()
 }
+
+// MARK: - Decimal Input Helper
+extension String {
+    /// Validates and formats decimal input to ensure only 2 decimal places are allowed
+    mutating func validateDecimalInput() {
+        // Remove any characters that aren't numbers or decimal point
+        self = self.filter { "0123456789.".contains($0) }
+        
+        // Only allow one decimal point
+        let components = self.components(separatedBy: ".")
+        if components.count > 2 {
+            self = components[0] + "." + components[1]
+        }
+        
+        // Limit to 2 decimal places
+        if components.count == 2 && components[1].count > 2 {
+            self = components[0] + "." + String(components[1].prefix(2))
+        }
+    }
+}
+
+
+

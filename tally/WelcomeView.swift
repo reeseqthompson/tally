@@ -37,6 +37,9 @@ struct WelcomeView: View {
                         TextField("Budget Amount", text: $overallBudgetText)
                             .keyboardType(.decimalPad)
                             .submitLabel(.done)
+                            .onChange(of: overallBudgetText) { newValue in
+                                overallBudgetText.validateDecimalInput()
+                            }
                     }
                     Button("Next") {
                         if let budget = overallBudget, budget > 0 {
@@ -59,7 +62,7 @@ struct WelcomeView: View {
                         }
                     }
                 }
-                .navigationTitle("Welcome To Tally")
+                .navigationTitle("Welcome to Tally")
             } else {
                 // Step 2: Allow the user to edit categories.
                 Form {
@@ -69,6 +72,10 @@ struct WelcomeView: View {
                                 TextField("Category Name", text: $customCategories[index].name)
                                 TextField("Allocation", value: $customCategories[index].total, format: .number)
                                     .keyboardType(.decimalPad)
+                                    .onChange(of: customCategories[index].total) { newValue in
+                                        // Round to 2 decimal places
+                                        customCategories[index].total = (newValue * 100).rounded() / 100
+                                    }
                             }
                         }
                         .onDelete { offsets in

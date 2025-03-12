@@ -54,7 +54,7 @@ struct SpendingGraphCardView: View {
             result.append(DailySpending(date: currentDate, total: cumulative))
         }
 
-        // Add these lines before "return result"
+        // Remove duplicate initial point if needed.
         if result.count > 1, Calendar.current.isDate(result[0].date, inSameDayAs: result[1].date) {
             result.remove(at: 0)
         }
@@ -76,6 +76,7 @@ struct SpendingGraphCardView: View {
                         x: .value("Date", dataPoint.date),
                         y: .value("Cumulative Spent", dataPoint.total)
                     )
+                    .foregroundStyle(Color.blue)
                 }
                 // Draw a horizontal rule at the overall budget.
                 RuleMark(y: .value("Overall Budget", overallBudget))
@@ -95,9 +96,7 @@ struct SpendingGraphCardView: View {
                 let monthEnd = calendar.date(byAdding: .day, value: monthRange.count - 1, to: monthStart)!
                 return monthStart...monthEnd
             }())
-
-            // Set the y-axis range to 0 to 120% of the overall budget.
-//            .chartYScale(domain: 0...(overallBudget * 1.2))
+            // Set the y-axis range to 0 to 150% of the overall budget.
             .chartYScale(domain: 0...(overallBudget * 1.5))
             .frame(height: 200)
             .padding(.horizontal)
@@ -109,32 +108,64 @@ struct SpendingGraphCardView: View {
         Group {
             if let dataPoint = dragDataPoint, let lineX = lineXPosition {
                 GeometryReader { geo in
-                    // Draw the vertical line.
+                    // Start the vertical line below the label (e.g. 30 points down).
                     Path { path in
-                        path.move(to: CGPoint(x: lineX, y: 0))
+                        path.move(to: CGPoint(x: lineX, y: 35))
                         path.addLine(to: CGPoint(x: lineX, y: geo.size.height))
                     }
                     .stroke(Color.gray, lineWidth: 1)
-                    
+
                     // Compute a clamped x position for the label.
-                    // Assume a label width of about 120; this centers it while keeping it within [60, geo.size.width - 60].
                     let clampedX = min(max(lineX, 60), geo.size.width - 60)
-                    
+
                     VStack(spacing: 4) {
                         Text("\(dataPoint.date, formatter: dateFormatter)")
                         Text(formatPreciseAmount(dataPoint.total))
                     }
                     .font(.caption)
                     .padding(6)
-                    .background(Color(.systemBackground).opacity(0.8))
+                    .background(Color(.systemBackground).opacity(0.0))
                     .cornerRadius(6)
-//                    .position(x: clampedX, y: -28)
                     .position(x: clampedX, y: 12)
                 }
                 .allowsHitTesting(false)
             }
-
         }
+    }
+
+    
+    /// The key overlay view that displays a legend for the chart.
+    private var keyOverlayView: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 4) {
+                // Dotted line representing total budget.
+                Path { path in
+                    path.move(to: .zero)
+                    path.addLine(to: CGPoint(x: 30, y: 0))
+                }
+                .stroke(style: StrokeStyle(lineWidth: 2, dash: [5]))
+                .foregroundColor(.red)
+                .frame(width: 30, height: 2)
+
+                Text("Budget")
+                    .font(.caption)
+            }
+            HStack(spacing: 4) {
+                // Blue dot representing spending.
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 8, height: 8)
+                Text("Cumulative Spent")
+                    .font(.caption)
+            }
+        }
+        .padding(8)
+        .background(Color(.systemBackground).opacity(0.0))
+        .cornerRadius(8)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .offset(y: -10)
+
     }
     
     private func updateLabel(location: CGPoint, proxy: ChartProxy, plotFrame: CGRect) {
@@ -159,7 +190,6 @@ struct SpendingGraphCardView: View {
         lineXPosition = plotFrame.minX + (plotFrame.width * CGFloat(ratio))
     }
 
-    
     var body: some View {
         ZStack {
             chartContent
@@ -177,19 +207,15 @@ struct SpendingGraphCardView: View {
                                         longPressActive = true
                                         let generator = UIImpactFeedbackGenerator(style: .medium)
                                         generator.impactOccurred()
-                                        // Immediately update the label if we already have a drag location.
                                         if let location = currentDragLocation {
                                             updateLabel(location: location, proxy: proxy, plotFrame: plotFrame)
                                         }
                                     }
                             )
-                            // Attach a simultaneous drag gesture.
                             .simultaneousGesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
-                                        // Only update if the horizontal movement is dominant.
                                         if abs(value.translation.width) < abs(value.translation.height) {
-                                            // Let vertical drags pass through for scrolling.
                                             return
                                         }
                                         currentDragLocation = value.location
@@ -207,9 +233,11 @@ struct SpendingGraphCardView: View {
                     }
                 }
             dragOverlayView
+            // Center the key overlay; hide it when a label is shown (i.e. dragDataPoint is non-nil).
+            keyOverlayView
+                .opacity(dragDataPoint == nil ? 1 : 0)
         }
         .padding(.vertical)
-//        .padding(.top, 40)
         .background(Color.cardBackground(for: colorScheme))
         .cornerRadius(10)
         .padding(.horizontal)
@@ -229,7 +257,6 @@ struct SpendingGraphCardView_Previews: PreviewProvider {
         }
         
         var sampleTransactions = [Transaction]()
-        // Create sample transactions for each day.
         for day in dayRange {
             if let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) {
                 let amount = Double.random(in: 10...100)
@@ -239,7 +266,6 @@ struct SpendingGraphCardView_Previews: PreviewProvider {
             }
         }
         
-        // Let's assume an overall budget for the month (for preview purposes) of $1500.
         return AnyView(
             SpendingGraphCardView(
                 transactions: sampleTransactions,
@@ -250,4 +276,3 @@ struct SpendingGraphCardView_Previews: PreviewProvider {
     }
 }
 #endif
-
